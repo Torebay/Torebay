@@ -1,0 +1,55 @@
+{
+  "name": "Jarvis",
+  "wake_words": ["джарвис", "jarvis", "джарви"],
+  "require_wake_word": true,
+  "language": "ru-RU",
+
+  "voice": {
+    "rate": 185,
+    "prefer_voice": "russian"
+  },
+
+  "claude": {
+    "model": "claude-opus-5-5",
+    "effort": "low",
+    "max_tokens": 1024,
+    "history_turns": 10
+  },
+
+  "apps": {
+    "telegram": {
+      "aliases": ["телеграм", "телеграмм", "телега", "telegram"],
+      "uri": "tg://",
+      "fallback_url": "https://web.telegram.org"
+    },
+    "whatsapp": {
+      "aliases": ["ватсап", "вотсап", "вацап", "whatsapp", "воцап"],
+      "uri": "whatsapp://",
+      "fallback_url": "https://web.whatsapp.com"
+    },
+    "youtube": {
+      "aliases": ["ютуб", "youtube", "ютюб"],
+      "url": "https://www.youtube.com"
+    },
+    "browser": {
+      "aliases": ["браузер", "гугл", "google", "интернет"],
+      "url": "https://www.google.com"
+    },
+    "notepad": {
+      "aliases": ["блокнот", "notepad"],
+      "command": "notepad"
+    },
+    "calculator": {
+      "aliases": ["калькулятор", "calculator"],
+      "command": "calc"
+    },
+    "explorer": {
+      "aliases": ["проводник", "папки", "мой компьютер"],
+      "command": "explorer"
+    },
+    "settings": {
+      "aliases": ["настройки", "параметры"],
+      "uri": "ms-settings:"
+    }
+  }
+}
