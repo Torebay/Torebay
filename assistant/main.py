@@ -72,6 +72,7 @@ def main() -> None:
     parser.add_argument("--text", action="store_true", help="печатать вместо голоса (без микрофона)")
     parser.add_argument("--lang", choices=["ru", "uz", "tr"], help="язык при запуске")
     parser.add_argument("--config", default=None, help="путь к config.json")
+    parser.add_argument("--no-ui", action="store_true", help="без анимированного окна")
     args = parser.parse_args()
 
     load_env()
@@ -79,18 +80,48 @@ def main() -> None:
     lang = lang_code(args.lang or config.language)
     brain = Brain(config.name, config.claude)
 
-    if args.text:
-        from .speech import TextIO
+    def make_io():
+        if args.text:
+            from .speech import TextIO
 
-        config.require_wake_word = False  # в текстовом режиме обращаться по имени не нужно
-        io = TextIO(config.name, lang)
-    else:
+            config.require_wake_word = False  # в текстовом режиме обращаться по имени не нужно
+            return TextIO(config.name, lang)
         from .speech import VoiceIO
 
-        io = VoiceIO(config.name, lang, config.voice)
+        return VoiceIO(config.name, lang, config.voice)
 
+    ui_settings = config.ui or {}
+    if args.no_ui or not ui_settings.get("enabled", True):
+        try:
+            run(make_io(), config, brain)
+        except KeyboardInterrupt:
+            print()
+        return
+
+    run_with_window(make_io, config, brain, ui_settings)
+
+
+def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
+    """Окно крутится в главном потоке, а ассистент слушает и отвечает в соседнем."""
+    import threading
+
+    from .ui import HudIO, HudWindow
+
+    hud = HudWindow(config.name, lang_code(config.language), ui_settings.get("always_on_top", True))
+
+    def worker():
+        try:
+            # Микрофон и голос создаём в этом же потоке: так голос Windows работает надёжнее.
+            run(HudIO(make_io(), hud), config, brain)
+        except Exception as exc:  # покажем ошибку в окне, а не молча закроемся
+            print(f"Ошибка: {exc}")
+            hud.set_caption(f"Ошибка: {exc}")
+            return
+        hud.close()
+
+    threading.Thread(target=worker, daemon=True).start()
     try:
-        run(io, config, brain)
+        hud.run()
     except KeyboardInterrupt:
         print()
 

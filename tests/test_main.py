@@ -22,9 +22,9 @@ class FakeIO:
 def test_ignores_phrases_without_name_and_answers_with_name(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     config = load_config()
-    io = FakeIO(["просто разговор", "Джарвис", "который час", "джарвис стоп"])
+    io = FakeIO(["просто разговор", "Картал", "который час", "картал стоп"])
     run(io, config, Brain(config.name, config.claude))
-    assert io.said[0] == "Jarvis на связи."
+    assert io.said[0] == "Kartal на связи."
     assert io.said[1] == "Слушаю."
     assert io.said[2].startswith("Сейчас ")
     assert io.said[-1] == "До встречи!"
@@ -34,7 +34,7 @@ def test_ignores_phrases_without_name_and_answers_with_name(monkeypatch):
 def test_question_without_key_explains_setup(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     config = load_config()
-    io = FakeIO(["джарвис почему небо голубое", "джарвис выход"])
+    io = FakeIO(["картал почему небо голубое", "картал выход"])
     run(io, config, Brain(config.name, config.claude))
     assert "ANTHROPIC_API_KEY" in io.said[1]
 
@@ -43,8 +43,8 @@ def test_switch_to_uzbek_and_turkish(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     config = load_config()
     io = FakeIO([
-        "джарвис говори по-узбекски", "jarvis soat necha",
-        "jarvis türkçe konuş", "carvis saat kaç", "jarvis dur",
+        "картал говори по-узбекски", "kartal soat necha",
+        "kartal türkçe konuş", "qartal saat kaç", "kartal dur",
     ])
     run(io, config, Brain(config.name, config.claude))
     assert io.said[1] == "Mayli, endi o'zbekcha gaplashaman."

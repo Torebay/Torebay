@@ -1,8 +1,13 @@
 {
-  "name": "Jarvis",
-  "wake_words": ["джарвис", "jarvis", "джарви", "жарвис", "carvis", "djarvis", "jarviz"],
+  "name": "Kartal",
+  "wake_words": ["картал", "kartal", "qartal", "kartel", "картель", "карталь"],
   "require_wake_word": true,
   "language": "ru",
+
+  "ui": {
+    "enabled": true,
+    "always_on_top": true
+  },
 
   "voice": {
     "rate": 185

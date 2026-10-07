@@ -20,6 +20,7 @@ class Config:
     voice: dict = field(default_factory=dict)
     claude: dict = field(default_factory=dict)
     apps: dict = field(default_factory=dict)
+    ui: dict = field(default_factory=dict)
 
     @property
     def all_wake_words(self) -> list[str]:
