@@ -4,9 +4,13 @@ from assistant.main import run
 
 
 class FakeIO:
-    def __init__(self, phrases):
+    def __init__(self, phrases, lang="ru"):
         self.phrases = list(phrases)
         self.said = []
+        self.lang = lang
+
+    def set_language(self, lang):
+        self.lang = lang
 
     def listen(self):
         return self.phrases.pop(0)
@@ -33,3 +37,18 @@ def test_question_without_key_explains_setup(monkeypatch):
     io = FakeIO(["джарвис почему небо голубое", "джарвис выход"])
     run(io, config, Brain(config.name, config.claude))
     assert "ANTHROPIC_API_KEY" in io.said[1]
+
+
+def test_switch_to_uzbek_and_turkish(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = load_config()
+    io = FakeIO([
+        "джарвис говори по-узбекски", "jarvis soat necha",
+        "jarvis türkçe konuş", "carvis saat kaç", "jarvis dur",
+    ])
+    run(io, config, Brain(config.name, config.claude))
+    assert io.said[1] == "Mayli, endi o'zbekcha gaplashaman."
+    assert io.said[2].startswith("Hozir soat ")
+    assert io.said[3] == "Tamam, artık Türkçe konuşuyorum."
+    assert io.said[4].startswith("Saat ")
+    assert io.said[5] == "Görüşürüz!"

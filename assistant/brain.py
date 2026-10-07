@@ -1,8 +1,14 @@
-"""Ответы на свободные вопросы через Claude API."""
+"""Ответы на свободные вопросы через Claude API, с поиском в интернете."""
 
 from __future__ import annotations
 
+import datetime
 import os
+
+from .i18n import t
+
+LANGUAGE_NAMES = {"ru": "русском", "uz": "узбекском (латиница)", "tr": "турецком"}
+MAX_CONTINUATIONS = 3
 
 
 class Brain:
@@ -10,8 +16,10 @@ class Brain:
         self.name = name
         self.model = settings.get("model", "claude-opus-5-5")
         self.effort = settings.get("effort", "low")
-        self.max_tokens = settings.get("max_tokens", 1024)
+        self.max_tokens = settings.get("max_tokens", 2048)
         self.history_turns = settings.get("history_turns", 10)
+        self.web_search = settings.get("web_search", True)
+        self.max_searches = settings.get("max_searches", 3)
         self.history: list[dict] = []
         self._client = None
 
@@ -19,59 +27,75 @@ class Brain:
     def available(self) -> bool:
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
-    @property
-    def system_prompt(self) -> str:
+    def system_prompt(self, lang: str) -> str:
+        today = datetime.date.today().isoformat()
         return (
             f"Ты голосовой ассистент по имени {self.name} на компьютере пользователя. "
-            "Отвечай на русском, коротко (одно-три предложения), простым разговорным языком: "
-            "ответ будет зачитан вслух, поэтому без списков, markdown, ссылок и эмодзи."
+            "Пользователь говорит по-русски, по-узбекски или по-турецки. "
+            "Отвечай на том языке, на котором задан вопрос; если язык непонятен, "
+            f"отвечай на {LANGUAGE_NAMES.get(lang, 'русском')}. "
+            "Отвечай коротко (одно-три предложения), простым разговорным языком: "
+            "ответ будет зачитан вслух, поэтому без списков, markdown, ссылок и эмодзи. "
+            "Для свежих данных (курсы валют, акции и криптовалюты на бирже, новости, погода, "
+            "результаты матчей) ищи в интернете и называй числа и время, к которому они относятся. "
+            "Не давай советов, что покупать или продавать. "
+            f"Сегодня {today}."
         )
 
     def reset(self) -> None:
         self.history.clear()
 
-    def ask(self, question: str) -> str:
+    def _tools(self) -> list[dict]:
+        if not self.web_search:
+            return []
+        return [{"type": "web_search_20260209", "name": "web_search", "max_uses": self.max_searches}]
+
+    def ask(self, question: str, lang: str = "ru") -> str:
         if not self.available:
-            return "Чтобы отвечать на вопросы, добавьте ключ ANTHROPIC_API_KEY в файл .env."
+            return t(lang, "no_key")
 
         import anthropic
 
         if self._client is None:
             self._client = anthropic.Anthropic()
 
-        self.history.append({"role": "user", "content": question})
+        messages = [*self.history, {"role": "user", "content": question}]
         try:
-            response = self._client.beta.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=self.system_prompt,
-                output_config={"effort": self.effort},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-                messages=self.history,
-            )
+            response = None
+            for _ in range(MAX_CONTINUATIONS + 1):
+                response = self._client.beta.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    system=self.system_prompt(lang),
+                    output_config={"effort": self.effort},
+                    tools=self._tools(),
+                    betas=["server-side-fallback-2026-07-01"],
+                    fallbacks="default",
+                    messages=messages,
+                )
+                if response.stop_reason != "pause_turn":
+                    break
+                # Поиск ещё идёт: отправляем ответ обратно, сервер продолжит с того же места.
+                messages = [*messages, {"role": "assistant", "content": response.content}]
         except anthropic.AuthenticationError:
-            self.history.pop()
-            return "Ключ Claude API не подошёл. Проверьте ANTHROPIC_API_KEY."
+            return t(lang, "bad_key")
         except anthropic.RateLimitError:
-            self.history.pop()
-            return "Слишком много запросов, попробуйте через минуту."
+            return t(lang, "rate_limit")
         except anthropic.APIStatusError as exc:
-            self.history.pop()
-            return f"Claude API вернул ошибку {exc.status_code}."
+            return t(lang, "api_error", x=exc.status_code)
         except anthropic.APIConnectionError:
-            self.history.pop()
-            return "Нет связи с интернетом."
+            return t(lang, "offline")
 
         if response.stop_reason == "refusal":
-            self.history.pop()
-            return "На этот вопрос я ответить не могу."
+            return t(lang, "refusal")
 
-        text = " ".join(b.text for b in response.content if b.type == "text").strip()
-        # Храним только текст ответа: без блоков размышлений историю можно спокойно обрезать.
-        self.history.append({"role": "assistant", "content": text or "..."})
+        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        if not text:
+            return t(lang, "no_answer")
+        # Храним только текст: без блоков размышлений и поиска историю можно спокойно обрезать.
+        self.history += [{"role": "user", "content": question}, {"role": "assistant", "content": text}]
         self._trim_history()
-        return text or "Не знаю, что ответить."
+        return text
 
     def _trim_history(self) -> None:
         limit = self.history_turns * 2

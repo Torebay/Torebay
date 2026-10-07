@@ -47,3 +47,11 @@ def test_youtube_search_url(monkeypatch):
     monkeypatch.setattr(apps.webbrowser, "open", opened.append)
     apps.youtube_search("рецепт плова")
     assert opened[0].startswith("https://www.youtube.com/results?search_query=")
+
+
+def test_open_app_strips_turkish_and_uzbek_endings(monkeypatch):
+    opened = []
+    monkeypatch.setattr(apps.webbrowser, "open", opened.append)
+    assert apps.open_app("youtubeu", APPS, "tr") == "youtube açılıyor"
+    assert apps.open_app("yutubni", APPS, "uz") == "yutub ochilmoqda"
+    assert opened == ["https://www.youtube.com"] * 2

@@ -9,41 +9,43 @@ from . import apps
 from .brain import Brain
 from .commands import parse, strip_wake_word
 from .config import load_config, load_env
-
-MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
-          "августа", "сентября", "октября", "ноября", "декабря"]
+from .i18n import format_date, lang_code, t
 
 
-def handle(text: str, config, brain: Brain) -> tuple[str, bool]:
+def handle(text: str, config, brain: Brain, io) -> tuple[str, bool]:
     """Выполняет одну фразу. Возвращает (ответ, продолжать ли работу)."""
     command = parse(text)
+    lang = io.lang
     now = datetime.datetime.now()
 
     if command.action == "exit":
-        return "До встречи!", False
+        return t(lang, "bye"), False
     if command.action == "empty":
-        return "Слушаю.", True
+        return t(lang, "listening"), True
     if command.action == "reset":
         brain.reset()
-        return "Хорошо, начнём разговор заново.", True
+        return t(lang, "reset"), True
+    if command.action == "lang":
+        io.set_language(command.arg)
+        return t(command.arg, "switched"), True
     if command.action == "time":
-        return f"Сейчас {now:%H:%M}.", True
+        return t(lang, "time", x=f"{now:%H:%M}"), True
     if command.action == "date":
-        return f"Сегодня {now.day} {MONTHS[now.month - 1]}.", True
+        return t(lang, "date", x=format_date(lang, now.day, now.month)), True
     try:
         if command.action == "open":
-            return apps.open_app(command.arg, config.apps), True
+            return apps.open_app(command.arg, config.apps, lang), True
         if command.action == "search":
-            return apps.web_search(command.arg), True
+            return apps.web_search(command.arg, lang), True
         if command.action == "youtube":
-            return apps.youtube_search(command.arg), True
+            return apps.youtube_search(command.arg, lang), True
     except Exception as exc:  # программа не открылась — не роняем ассистента
-        return f"Не получилось: {exc}", True
-    return brain.ask(command.arg), True
+        return t(lang, "failed", x=exc), True
+    return brain.ask(command.arg, lang), True
 
 
 def run(io, config, brain: Brain) -> None:
-    io.say(f"{config.name} на связи.")
+    io.say(t(io.lang, "hello", name=config.name))
     waiting_for_command = False
     while True:
         heard = io.listen()
@@ -54,12 +56,12 @@ def run(io, config, brain: Brain) -> None:
         if config.require_wake_word and not called and not waiting_for_command:
             continue  # фраза была не для ассистента
         if called and not rest:
-            io.say("Слушаю.")
+            io.say(t(io.lang, "listening"))
             waiting_for_command = True
             continue
 
         waiting_for_command = False
-        answer, keep_going = handle(rest, config, brain)
+        answer, keep_going = handle(rest, config, brain, io)
         io.say(answer)
         if not keep_going:
             break
@@ -68,22 +70,24 @@ def run(io, config, brain: Brain) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Голосовой ассистент")
     parser.add_argument("--text", action="store_true", help="печатать вместо голоса (без микрофона)")
+    parser.add_argument("--lang", choices=["ru", "uz", "tr"], help="язык при запуске")
     parser.add_argument("--config", default=None, help="путь к config.json")
     args = parser.parse_args()
 
     load_env()
     config = load_config(args.config) if args.config else load_config()
+    lang = lang_code(args.lang or config.language)
     brain = Brain(config.name, config.claude)
 
     if args.text:
         from .speech import TextIO
 
         config.require_wake_word = False  # в текстовом режиме обращаться по имени не нужно
-        io = TextIO(config.name)
+        io = TextIO(config.name, lang)
     else:
         from .speech import VoiceIO
 
-        io = VoiceIO(config.name, config.language, config.voice)
+        io = VoiceIO(config.name, lang, config.voice)
 
     try:
         run(io, config, brain)

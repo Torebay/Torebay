@@ -14,6 +14,9 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
+from .commands import app_name_variants
+from .i18n import t
+
 
 def start_menu_dirs() -> list[Path]:
     dirs = []
@@ -48,17 +51,20 @@ def find_shortcut(name: str, dirs: list[Path] | None = None) -> Path | None:
     return candidates[close[0]] if close else None
 
 
-def resolve_app(name: str, apps: dict) -> tuple[str, dict] | None:
-    """Находит программу из config.json по имени или синониму."""
+def resolve_app(name: str, apps: dict) -> tuple[str, dict, str] | None:
+    """Находит программу из config.json. Возвращает (ключ, запись, совпавшее имя)."""
     name = name.lower().strip()
     for key, entry in apps.items():
         names = [key.lower(), *(a.lower() for a in entry.get("aliases", []))]
         if name in names:
-            return key, entry
+            return key, entry, name
+    if len(name) < 4:
+        return None
     for key, entry in apps.items():
         names = [key.lower(), *(a.lower() for a in entry.get("aliases", []))]
-        if any(n in name or name in n for n in names if len(n) >= 4):
-            return key, entry
+        for n in names:
+            if len(n) >= 4 and (n in name or name in n):
+                return key, entry, n
     return None
 
 
@@ -93,31 +99,33 @@ def open_entry(entry: dict) -> None:
     raise ValueError("В записи программы нет uri, url, path или command")
 
 
-def open_app(name: str, apps: dict) -> str:
+def open_app(name: str, apps: dict, lang: str = "ru") -> str:
     """Открывает программу и возвращает фразу для ответа голосом."""
-    found = resolve_app(name, apps)
-    if found:
-        key, entry = found
-        open_entry(entry)
-        return f"Открываю {name}"
+    variants = app_name_variants(name)
+    for variant in variants:
+        found = resolve_app(variant, apps)
+        if found:
+            open_entry(found[1])
+            return t(lang, "open", x=found[2])
 
-    shortcut = find_shortcut(name)
-    if shortcut:
-        _start(str(shortcut))
-        return f"Открываю {shortcut.stem}"
+    for variant in variants:
+        shortcut = find_shortcut(variant)
+        if shortcut:
+            _start(str(shortcut))
+            return t(lang, "open", x=shortcut.stem)
 
     if "." in name and " " not in name:  # похоже на сайт: «открой vk.com»
         webbrowser.open(name if "://" in name else f"https://{name}")
-        return f"Открываю сайт {name}"
+        return t(lang, "open_site", x=name)
 
-    return f"Не нашёл программу {name}. Добавьте её в config.json."
+    return t(lang, "not_found", x=name)
 
 
-def web_search(query: str) -> str:
+def web_search(query: str, lang: str = "ru") -> str:
     webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
-    return f"Ищу {query}"
+    return t(lang, "search", x=query)
 
 
-def youtube_search(query: str) -> str:
+def youtube_search(query: str, lang: str = "ru") -> str:
     webbrowser.open("https://www.youtube.com/results?search_query=" + urllib.parse.quote(query))
-    return f"Ищу на ютубе {query}"
+    return t(lang, "youtube", x=query)

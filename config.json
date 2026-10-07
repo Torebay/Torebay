@@ -1,54 +1,55 @@
 {
   "name": "Jarvis",
-  "wake_words": ["джарвис", "jarvis", "джарви"],
+  "wake_words": ["джарвис", "jarvis", "джарви", "жарвис", "carvis", "djarvis", "jarviz"],
   "require_wake_word": true,
-  "language": "ru-RU",
+  "language": "ru",
 
   "voice": {
-    "rate": 185,
-    "prefer_voice": "russian"
+    "rate": 185
   },
 
   "claude": {
     "model": "claude-opus-5-5",
     "effort": "low",
-    "max_tokens": 1024,
-    "history_turns": 10
+    "max_tokens": 2048,
+    "history_turns": 10,
+    "web_search": true,
+    "max_searches": 3
   },
 
   "apps": {
     "telegram": {
-      "aliases": ["телеграм", "телеграмм", "телега", "telegram"],
+      "aliases": ["телеграм", "телеграмм", "телега", "telegram", "telegramm", "tilgram"],
       "uri": "tg://",
       "fallback_url": "https://web.telegram.org"
     },
     "whatsapp": {
-      "aliases": ["ватсап", "вотсап", "вацап", "whatsapp", "воцап"],
+      "aliases": ["ватсап", "вотсап", "вацап", "whatsapp", "воцап", "vatsap", "watsap", "vatsapp"],
       "uri": "whatsapp://",
       "fallback_url": "https://web.whatsapp.com"
     },
     "youtube": {
-      "aliases": ["ютуб", "youtube", "ютюб"],
+      "aliases": ["ютуб", "youtube", "ютюб", "yutub", "yutup", "youtub"],
       "url": "https://www.youtube.com"
     },
     "browser": {
-      "aliases": ["браузер", "гугл", "google", "интернет"],
+      "aliases": ["браузер", "гугл", "google", "интернет", "brauzer", "tarayıcı", "internet"],
       "url": "https://www.google.com"
     },
     "notepad": {
-      "aliases": ["блокнот", "notepad"],
+      "aliases": ["блокнот", "notepad", "not defteri", "bloknot"],
       "command": "notepad"
     },
     "calculator": {
-      "aliases": ["калькулятор", "calculator"],
+      "aliases": ["калькулятор", "calculator", "hesap makinesi", "kalkulyator"],
       "command": "calc"
     },
     "explorer": {
-      "aliases": ["проводник", "папки", "мой компьютер"],
+      "aliases": ["проводник", "папки", "мой компьютер", "dosya gezgini", "provodnik"],
       "command": "explorer"
     },
     "settings": {
-      "aliases": ["настройки", "параметры"],
+      "aliases": ["настройки", "параметры", "ayarlar", "sozlamalar"],
       "uri": "ms-settings:"
     }
   }
