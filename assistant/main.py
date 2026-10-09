@@ -110,7 +110,12 @@ def main() -> None:
     load_env()
     config = load_config(args.config) if args.config else load_config()
     lang = lang_code(args.lang or config.language)
-    brain = Brain(config.name, config.claude)
+    from .memory import Memory
+    from .pc_tools import PcTools
+
+    memory = Memory()  # memory.json рядом с config.json: разговор и факты переживают перезапуск
+    tools = PcTools(memory) if config.claude.get("pc_control", True) else None
+    brain = Brain(config.name, config.claude, memory=memory, tools=tools)
 
     def make_io():
         if args.text:

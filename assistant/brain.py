@@ -6,14 +6,15 @@ import datetime
 import os
 
 from .i18n import t
+from .memory import Memory
 from .speech_text import SentenceSplitter
 
 LANGUAGE_NAMES = {"ru": "русском", "uz": "узбекском (латиница)", "tr": "турецком"}
-MAX_CONTINUATIONS = 3
+MAX_STEPS = 8  # продолжения поиска и вызовы инструментов компьютера за один вопрос
 
 
 class Brain:
-    def __init__(self, name: str, settings: dict):
+    def __init__(self, name: str, settings: dict, memory: Memory | None = None, tools=None):
         self.name = name
         self.model = settings.get("model", "claude-opus-5-5")
         self.effort = settings.get("effort", "low")
@@ -21,8 +22,13 @@ class Brain:
         self.history_turns = settings.get("history_turns", 10)
         self.web_search = settings.get("web_search", True)
         self.max_searches = settings.get("max_searches", 3)
-        self.history: list[dict] = []
+        self.memory = memory or Memory(None)  # без файла — только на время работы
+        self.tools = tools  # PcTools: управление компьютером; None — только разговор
         self._client = None
+
+    @property
+    def history(self) -> list[dict]:
+        return self.memory.history
 
     @property
     def available(self) -> bool:
@@ -42,15 +48,39 @@ class Brain:
             "результаты матчей) ищи в интернете и называй числа и время, к которому они относятся. "
             "Не давай советов, что покупать или продавать. "
             f"Сегодня {today}."
+            + self._tools_prompt()
+            + self._facts_prompt()
         )
+
+    def _tools_prompt(self) -> str:
+        if self.tools is None:
+            return ""
+        return (
+            " Ты можешь управлять компьютером через инструменты: громкость, музыка, папки, поиск и "
+            "открытие файлов, блокировка, сон, выключение, снимок экрана. Делай то, что просят, и "
+            "коротко скажи, что сделал. Перед выключением или перезагрузкой сначала спроси "
+            "подтверждение и вызывай инструмент только после явного «да». "
+            "Когда тебя просят что-то запомнить, сохрани это инструментом remember."
+        )
+
+    def _facts_prompt(self) -> str:
+        if not self.memory.facts:
+            return ""
+        return " Что ты знаешь о пользователе: " + "; ".join(self.memory.facts) + "."
 
     def reset(self) -> None:
         self.history.clear()
+        self.memory.save()
 
     def _tools(self) -> list[dict]:
-        if not self.web_search:
-            return []
-        return [{"type": "web_search_20260209", "name": "web_search", "max_uses": self.max_searches}]
+        tools = []
+        if self.web_search:
+            tools.append({"type": "web_search_20260209", "name": "web_search", "max_uses": self.max_searches})
+        if self.tools is not None:
+            from .pc_tools import TOOLS
+
+            tools += TOOLS
+        return tools
 
     def ask(self, question: str, lang: str = "ru", on_sentence=None) -> str:
         """Ответ на вопрос. Ответ приходит потоком: on_sentence получает каждое готовое
@@ -65,14 +95,21 @@ class Brain:
 
         splitter = SentenceSplitter(on_sentence or (lambda sentence: None))
         messages = [*self.history, {"role": "user", "content": question}]
+        texts = []
         try:
             response = None
-            for _ in range(MAX_CONTINUATIONS + 1):
+            for _ in range(MAX_STEPS + 1):
                 response = self._stream(lang, messages, splitter)
-                if response.stop_reason != "pause_turn":
+                texts.append("".join(b.text for b in response.content if b.type == "text"))
+                if response.stop_reason == "pause_turn":
+                    # Поиск ещё идёт: отправляем ответ обратно, сервер продолжит с того же места.
+                    messages = [*messages, {"role": "assistant", "content": response.content}]
+                elif response.stop_reason == "tool_use" and self.tools is not None:
+                    splitter.flush()  # «Сейчас сделаю тише» звучит, пока инструмент работает
+                    messages = [*messages, {"role": "assistant", "content": response.content},
+                                {"role": "user", "content": self._run_tools(response.content)}]
+                else:
                     break
-                # Поиск ещё идёт: отправляем ответ обратно, сервер продолжит с того же места.
-                messages = [*messages, {"role": "assistant", "content": response.content}]
         except anthropic.AuthenticationError:
             return t(lang, "bad_key")
         except anthropic.RateLimitError:
@@ -86,13 +123,23 @@ class Brain:
             return t(lang, "refusal")
         splitter.flush()
 
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        text = " ".join(x.strip() for x in texts if x.strip())
         if not text:
             return t(lang, "no_answer")
         # Храним только текст: без блоков размышлений и поиска историю можно спокойно обрезать.
-        self.history += [{"role": "user", "content": question}, {"role": "assistant", "content": text}]
+        self.history.extend([{"role": "user", "content": question}, {"role": "assistant", "content": text}])
         self._trim_history()
+        self.memory.save()
         return text
+
+    def _run_tools(self, content) -> list[dict]:
+        results = []
+        for block in content:
+            if block.type != "tool_use":
+                continue
+            output = self.tools.execute(block.name, block.input)
+            results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
+        return results
 
     def _stream(self, lang: str, messages: list, splitter: SentenceSplitter):
         with self._client.beta.messages.stream(

@@ -24,14 +24,30 @@ class Brain(
     private val historyTurns: Int = 10,
     private val maxSearches: Long = 3,
 ) {
-    private val history = mutableListOf<BetaMessageParam>()
+    // Пары «вопрос — ответ»: их можно сохранить, чтобы разговор пережил перезапуск.
+    private val turns = mutableListOf<Pair<String, String>>()
     private val client: AnthropicClient? by lazy {
         if (apiKey.isBlank()) null else AnthropicOkHttpClient.builder().apiKey(apiKey.trim()).build()
     }
 
     val available get() = apiKey.isNotBlank()
 
-    fun reset() = history.clear()
+    fun reset() = turns.clear()
+
+    /** Разговор для сохранения в памяти телефона. */
+    fun exportTurns(): List<Pair<String, String>> = turns.toList()
+
+    fun importTurns(saved: List<Pair<String, String>>) {
+        turns.clear()
+        turns += saved.takeLast(historyTurns)
+    }
+
+    private fun history(): List<BetaMessageParam> = turns.flatMap { (q, a) ->
+        listOf(
+            BetaMessageParam.builder().role(BetaMessageParam.Role.USER).content(q).build(),
+            BetaMessageParam.builder().role(BetaMessageParam.Role.ASSISTANT).content(a).build(),
+        )
+    }
 
     private fun systemPrompt(lang: String): String {
         val fallback = mapOf("ru" to "русском", "uz" to "узбекском (латиница)", "tr" to "турецком")
@@ -66,7 +82,7 @@ class Brain(
             // Если модель откажется отвечать, сервер сам попробует подходящую запасную модель.
             .addBeta("server-side-fallback-2026-07-01")
             .putAdditionalBodyProperty("fallbacks", JsonValue.from("default"))
-            .messages(history + userMessage)
+            .messages(history() + userMessage)
             .build()
 
         val splitter = SentenceSplitter { sentence -> onSentence?.invoke(sentence) }
@@ -98,9 +114,8 @@ class Brain(
         if (text.isEmpty()) return I18n.t(lang, "no_answer")
 
         // Храним только текст: без блоков размышлений и поиска историю можно спокойно обрезать.
-        history += userMessage
-        history += BetaMessageParam.builder().role(BetaMessageParam.Role.ASSISTANT).content(text).build()
-        while (history.size > historyTurns * 2) history.removeAt(0)
+        turns += question to text
+        while (turns.size > historyTurns) turns.removeAt(0)
         return text
     }
 

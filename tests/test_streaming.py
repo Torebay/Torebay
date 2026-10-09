@@ -77,7 +77,7 @@ def test_brain_streams_sentences_and_continues_after_pause(monkeypatch):
     heard = []
     answer = brain.ask("сколько стоит биткоин", "ru", on_sentence=heard.append)
     assert heard == ["Ищу", "Биткоин стоит 118 тысяч.", "Это на 2% больше."]
-    assert answer == "Биткоин стоит 118 тысяч. Это на 2% больше."
+    assert answer == "Ищу Биткоин стоит 118 тысяч. Это на 2% больше."
     assert len(calls) == 2 and calls[0]["model"] == "claude-opus-5-5"
     assert calls[1]["messages"][-1]["role"] == "assistant"
 

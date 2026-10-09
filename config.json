@@ -24,7 +24,8 @@
     "max_tokens": 2048,
     "history_turns": 10,
     "web_search": true,
-    "max_searches": 3
+    "max_searches": 3,
+    "pc_control": true
   },
 
   "apps": {

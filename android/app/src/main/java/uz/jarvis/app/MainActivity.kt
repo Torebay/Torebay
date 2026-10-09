@@ -245,7 +245,24 @@ class MainActivity : Activity() {
     }
 
     private fun rebuildBrain() {
-        brain = Brain(name, prefs.getString("api_key", "") ?: "")
+        brain = Brain(name, prefs.getString("api_key", "") ?: "").also { it.importTurns(loadTurns()) }
+    }
+
+    /** Разговор хранится в настройках приложения, чтобы пережить перезапуск. */
+    private fun loadTurns(): List<Pair<String, String>> = try {
+        val array = org.json.JSONArray(prefs.getString("history", "[]"))
+        (0 until array.length()).map { i ->
+            val item = array.getJSONArray(i)
+            item.getString(0) to item.getString(1)
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun saveTurns(turns: List<Pair<String, String>>) {
+        val array = org.json.JSONArray()
+        turns.forEach { (q, a) -> array.put(org.json.JSONArray().put(q).put(a)) }
+        prefs.edit().putString("history", array.toString()).apply()
     }
 
     // --- голос -----------------------------------------------------------------------
@@ -401,7 +418,7 @@ class MainActivity : Activity() {
         when (command.action) {
             Action.EXIT -> { say(I18n.t(lang, "bye")); main.postDelayed({ finish() }, 1500) }
             Action.EMPTY -> { waitingForCommand = true; say(I18n.t(lang, "listening")) }
-            Action.RESET -> { brain?.reset(); say(I18n.t(lang, "reset")) }
+            Action.RESET -> { brain?.reset(); saveTurns(emptyList()); say(I18n.t(lang, "reset")) }
             Action.LANG -> {
                 lang = command.arg
                 prefs.edit().putString("lang", lang).apply()
@@ -443,6 +460,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 I18n.t(askLang, "failed", e.message ?: e.javaClass.simpleName)
             }
+            saveTurns(b.exportTurns())
             main.post {
                 if (answerId != myId) return@post
                 if (spoken == 0) { say(answer); return@post }
