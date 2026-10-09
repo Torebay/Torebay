@@ -287,8 +287,9 @@ class Dashboard:
     def set_language(self, lang: str) -> None:
         self.events.put(("lang", lang))
 
-    def log(self, who: str, text: str) -> None:
-        self.events.put(("feed", (who, text)))
+    def log(self, who: str, text: str, append: bool = False) -> None:
+        """append=True дописывает текст к последней записи (ответ приходит по предложениям)."""
+        self.events.put(("feed", (who, text, append)))
 
     def take_command(self) -> str | None:
         try:
@@ -368,10 +369,14 @@ class Dashboard:
                 if was_placeholder:
                     self._placeholder(True)
             elif kind == "feed":
-                who, text = value
+                who, text, append = value
                 text = " ".join(text.split())
-                self.feed.insert(0, (datetime.datetime.now().strftime("%H:%M"), who,
-                                     text if len(text) <= 150 else text[:147] + "…"))
+                if append and self.feed and self.feed[0][1] == who:
+                    when, _, previous = self.feed.pop(0)
+                    text = f"{previous} {text}"
+                else:
+                    when = datetime.datetime.now().strftime("%H:%M")
+                self.feed.insert(0, (when, who, text[:1000]))
                 del self.feed[40:]
             elif kind == "close":
                 self.closed = True
@@ -650,6 +655,8 @@ class Dashboard:
             return
         y, bottom = 50 + 72, 456
         for when, who, message in self.feed:
+            if len(message) > 150:
+                message = message[:147] + "…"
             if y > bottom - 30:
                 break
             color = ACCENT if who == "user" else GREEN

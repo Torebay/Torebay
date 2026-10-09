@@ -11,8 +11,8 @@ class FakeHud:
     def set_language(self, lang):
         self.events.append(("lang", lang))
 
-    def log(self, who, text):
-        self.events.append(("log", who, text))
+    def log(self, who, text, append=False):
+        self.events.append(("log", who, text) if not append else ("log+", who, text))
 
     def __init__(self, typed=None, armed=False):
         self.events = []
@@ -38,7 +38,7 @@ class FakeIO:
     def listen(self):
         return self.heard
 
-    def say(self, text):
+    def say(self, text, append=False):
         self.said.append(text)
 
     def set_language(self, lang):

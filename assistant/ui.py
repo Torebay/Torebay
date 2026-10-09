@@ -77,7 +77,7 @@ class HudWindow:
     def set_language(self, lang: str) -> None:
         self.events.put(("lang", lang))
 
-    def log(self, who: str, text: str) -> None:
+    def log(self, who: str, text: str, append: bool = False) -> None:
         pass  # в маленьком окне ленты нет, только подпись
 
     def take_command(self) -> str | None:
@@ -228,11 +228,16 @@ class HudIO:
                 heard = f"{self.name} {heard}"
         return heard
 
-    def say(self, text: str) -> None:
+    def prefetch(self, text: str) -> None:
+        prefetch = getattr(self.inner, "prefetch", None)
+        if prefetch is not None:
+            prefetch(text)
+
+    def say(self, text: str, append: bool = False) -> None:
         self.hud.set_state("speaking")
         self.hud.set_caption(text)
-        self.hud.log("bot", text)
+        self.hud.log("bot", text, append=append)
         try:
-            self.inner.say(text)
+            self.inner.say(text, append=append)
         finally:
             self.hud.set_state("idle")

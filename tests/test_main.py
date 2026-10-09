@@ -15,7 +15,7 @@ class FakeIO:
     def listen(self):
         return self.phrases.pop(0)
 
-    def say(self, text):
+    def say(self, text, append=False):
         self.said.append(text)
 
 

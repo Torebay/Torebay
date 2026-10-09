@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import queue
+import threading
 
 from . import apps
 from .brain import Brain
@@ -12,8 +14,9 @@ from .config import load_config, load_env
 from .i18n import format_date, lang_code, t
 
 
-def handle(text: str, config, brain: Brain, io) -> tuple[str, bool]:
-    """Выполняет одну фразу. Возвращает (ответ, продолжать ли работу)."""
+def handle(text: str, config, brain: Brain, io) -> tuple[str | None, bool]:
+    """Выполняет одну фразу. Возвращает (ответ, продолжать ли работу).
+    Ответ None значит, что он уже сказан вслух."""
     command = parse(text)
     lang = io.lang
     now = datetime.datetime.now()
@@ -41,7 +44,35 @@ def handle(text: str, config, brain: Brain, io) -> tuple[str, bool]:
             return apps.youtube_search(command.arg, lang), True
     except Exception as exc:  # программа не открылась — не роняем ассистента
         return t(lang, "failed", x=exc), True
-    return brain.ask(command.arg, lang), True
+    return ask_aloud(brain, command.arg, lang, io), True
+
+
+def ask_aloud(brain: Brain, question: str, lang: str, io) -> str | None:
+    """Говорит ответ Claude по предложениям, пока остальное ещё пишется.
+    Возвращает ответ, если ничего не было сказано (ошибка, нет ключа), иначе None."""
+    sentences: queue.Queue = queue.Queue()
+    prefetch = getattr(io, "prefetch", None)
+    result = {}
+
+    def on_sentence(sentence: str) -> None:
+        if prefetch is not None:
+            prefetch(sentence)  # голос начинает готовиться сразу, ещё до своей очереди
+        sentences.put(sentence)
+
+    def work() -> None:
+        try:
+            result["answer"] = brain.ask(question, lang, on_sentence=on_sentence)
+        except Exception as exc:
+            result["answer"] = t(lang, "failed", x=exc)
+        finally:
+            sentences.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+    spoken = 0
+    while (sentence := sentences.get()) is not None:
+        io.say(sentence, append=spoken > 0)
+        spoken += 1
+    return None if spoken else result.get("answer")
 
 
 def run(io, config, brain: Brain) -> None:
@@ -62,7 +93,8 @@ def run(io, config, brain: Brain) -> None:
 
         waiting_for_command = False
         answer, keep_going = handle(rest, config, brain, io)
-        io.say(answer)
+        if answer:
+            io.say(answer)
         if not keep_going:
             break
 
@@ -103,8 +135,6 @@ def main() -> None:
 
 def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
     """Окно крутится в главном потоке, а ассистент слушает и отвечает в соседнем."""
-    import threading
-
     from .ui import HudIO, HudWindow
 
     lang = lang_code(config.language)
