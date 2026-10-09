@@ -1,10 +1,20 @@
 {
-  "name": "Jarvis",
-  "wake_words": ["джарвис", "jarvis", "джарви", "жарвис", "carvis", "djarvis", "jarviz"],
+  "name": "Kartal",
+  "wake_words": ["картал", "kartal", "qartal", "kartel", "картель", "карталь"],
   "require_wake_word": true,
   "language": "ru",
 
+  "ui": {
+    "enabled": true,
+    "style": "dashboard",
+    "theme": "green",
+    "always_on_top": false
+  },
+
   "voice": {
+    "engine": "edge",
+    "gender": "male",
+    "edge_rate": "+0%",
     "rate": 185
   },
 
@@ -14,7 +24,8 @@
     "max_tokens": 2048,
     "history_turns": 10,
     "web_search": true,
-    "max_searches": 3
+    "max_searches": 3,
+    "pc_control": true
   },
 
   "apps": {

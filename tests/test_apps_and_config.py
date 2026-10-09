@@ -4,10 +4,10 @@ from assistant.config import load_config
 APPS = load_config().apps
 
 
-def test_default_name_is_jarvis():
+def test_default_name_is_kartal():
     config = load_config()
-    assert config.name == "Jarvis"
-    assert "джарвис" in config.all_wake_words
+    assert config.name == "Kartal"
+    assert "картал" in config.all_wake_words
 
 
 def test_name_comes_from_config(tmp_path):
