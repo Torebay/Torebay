@@ -32,6 +32,7 @@ import uz.jarvis.core.Action
 import uz.jarvis.core.Brain
 import uz.jarvis.core.Commands
 import uz.jarvis.core.I18n
+import uz.jarvis.core.SpeechText
 import java.time.LocalDateTime
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -49,6 +50,10 @@ class MainActivity : Activity() {
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    // Фразы, которые ещё читаются, и идёт ли ещё ответ: слушать снова только когда всё закончено.
+    private val pendingSpeech = mutableSetOf<String>()
+    private var answerStreaming = false
+    private var answerId = 0
     private var brain: Brain? = null
 
     private var lang = I18n.DEFAULT
@@ -77,12 +82,12 @@ class MainActivity : Activity() {
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
             override fun onDone(id: String?) {
-                main.post { afterSpeaking() }
+                main.post { speechFinished(id) }
             }
 
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) {
-                main.post { afterSpeaking() }
+                main.post { speechFinished(id) }
             }
         })
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -205,6 +210,17 @@ class MainActivity : Activity() {
         box.addView(label("Ключ Claude API (console.anthropic.com)"))
         box.addView(keyField)
         box.addView(alwaysSwitch.apply { setPadding(0, dp(14), 0, 0) })
+        box.addView(android.widget.Button(this).apply {
+            text = "Голос телефона (скачать качественный голос)"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                } catch (e: Exception) {
+                    caption.text = "Откройте: Настройки → Специальные возможности → Синтез речи"
+                }
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
         AlertDialog.Builder(this)
             .setTitle("Настройки")
@@ -240,17 +256,56 @@ class MainActivity : Activity() {
         // Узбекского голоса на телефонах обычно нет, тогда читаем турецким.
         val wanted = when (lang) { "uz" -> listOf("uz-UZ", "tr-TR"); "tr" -> listOf("tr-TR"); else -> listOf("ru-RU") }
         for (tag in wanted) {
-            val r = t.setLanguage(Locale.forLanguageTag(tag))
-            if (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED) break
+            val locale = Locale.forLanguageTag(tag)
+            val r = t.setLanguage(locale)
+            if (r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED) {
+                pickBestVoice(t, locale)
+                break
+            }
         }
+        t.setSpeechRate(1.0f)
+        t.setPitch(1.0f)
     }
 
+    /** Самый качественный установленный голос для языка, а не первый попавшийся. */
+    private fun pickBestVoice(t: TextToSpeech, locale: Locale) {
+        val voices = try { t.voices } catch (e: Exception) { null } ?: return
+        val best = voices
+            .filter { it.locale.language == locale.language }
+            .filter { TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
+            .maxWithOrNull(compareBy(
+                { it.locale.country == locale.country },
+                { it.quality },
+                { !it.isNetworkConnectionRequired },
+                { it.latency <= android.speech.tts.Voice.LATENCY_NORMAL },
+            )) ?: return
+        t.voice = best
+    }
+
+    /** Сказать фразу целиком, прервав то, что говорилось раньше. */
     private fun say(text: String) {
+        answerStreaming = false
+        answerId++
+        pendingSpeech.clear()
         caption.text = text
+        speak(text, TextToSpeech.QUEUE_FLUSH)
+    }
+
+    /** Добавить фразу в очередь: так ответ читается по предложениям, пока остальное ещё пишется. */
+    private fun speak(text: String, mode: Int) {
         setState(HudState.SPEAKING)
-        if (!ttsReady) { afterSpeaking(); return }
+        val clean = SpeechText.clean(text)
+        val t = tts
+        if (!ttsReady || t == null || clean.isEmpty()) { speechFinished(null); return }
         stopListening()
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "kartal-" + System.nanoTime())
+        val id = "kartal-" + System.nanoTime()
+        pendingSpeech += id
+        t.speak(clean, mode, null, id)
+    }
+
+    private fun speechFinished(id: String?) {
+        if (id != null && !pendingSpeech.remove(id)) return
+        if (pendingSpeech.isEmpty() && !answerStreaming) afterSpeaking()
     }
 
     private fun afterSpeaking() {
@@ -369,13 +424,32 @@ class MainActivity : Activity() {
         val b = brain ?: return
         setState(HudState.THINKING)
         val askLang = lang
+        answerStreaming = true
+        val myId = ++answerId
+        pendingSpeech.clear()
+        val shown = StringBuilder()
         worker.execute {
+            var spoken = 0
             val answer = try {
-                b.ask(question, askLang)
+                b.ask(question, askLang) { sentence ->
+                    spoken++
+                    main.post {
+                        if (answerId != myId) return@post
+                        shown.append(if (shown.isEmpty()) "" else " ").append(sentence)
+                        caption.text = shown.toString()
+                        speak(sentence, TextToSpeech.QUEUE_ADD)
+                    }
+                }
             } catch (e: Exception) {
                 I18n.t(askLang, "failed", e.message ?: e.javaClass.simpleName)
             }
-            main.post { say(answer) }
+            main.post {
+                if (answerId != myId) return@post
+                if (spoken == 0) { say(answer); return@post }
+                answerStreaming = false
+                caption.text = answer
+                speechFinished(null)
+            }
         }
     }
 

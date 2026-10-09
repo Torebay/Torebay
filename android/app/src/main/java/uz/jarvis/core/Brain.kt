@@ -7,6 +7,8 @@ import com.anthropic.errors.AnthropicIoException
 import com.anthropic.errors.AnthropicServiceException
 import com.anthropic.errors.RateLimitException
 import com.anthropic.errors.UnauthorizedException
+import com.anthropic.helpers.BetaMessageAccumulator
+import com.anthropic.models.beta.messages.BetaMessage
 import com.anthropic.models.beta.messages.BetaMessageParam
 import com.anthropic.models.beta.messages.BetaOutputConfig
 import com.anthropic.models.beta.messages.BetaStopReason
@@ -37,7 +39,8 @@ class Brain(
             "Пользователь говорит по-русски, по-узбекски или по-турецки. " +
             "Отвечай на том языке, на котором задан вопрос; если язык непонятен, " +
             "отвечай на ${fallback[I18n.code(lang)]}. " +
-            "Отвечай коротко (одно-три предложения), простым разговорным языком: " +
+            "Отвечай коротко (одно-три предложения), простым разговорным языком, сразу по делу, " +
+            "без вступлений вроде «сейчас поищу»: " +
             "ответ будет зачитан вслух, поэтому без списков, markdown, ссылок и эмодзи. " +
             "Для свежих данных (курсы валют, акции и криптовалюты на бирже, новости, погода, " +
             "результаты матчей) ищи в интернете и называй числа и время, к которому они относятся. " +
@@ -45,8 +48,12 @@ class Brain(
             "Сегодня ${LocalDate.now()}."
     }
 
-    /** Блокирующий вызов: запускать не в главном потоке. */
-    fun ask(question: String, lang: String): String {
+    /**
+     * Блокирующий вызов: запускать не в главном потоке.
+     * Ответ приходит потоком; onSentence получает каждое готовое предложение сразу,
+     * чтобы его можно было начать читать, пока остальное ещё пишется.
+     */
+    fun ask(question: String, lang: String, onSentence: ((String) -> Unit)? = null): String {
         val c = client ?: return I18n.t(lang, "no_key")
         val userMessage = BetaMessageParam.builder().role(BetaMessageParam.Role.USER).content(question).build()
 
@@ -62,13 +69,14 @@ class Brain(
             .messages(history + userMessage)
             .build()
 
+        val splitter = SentenceSplitter { sentence -> onSentence?.invoke(sentence) }
         val response = try {
-            var r = c.beta().messages().create(params)
+            var r = stream(c, params, splitter)
             var continuations = 0
             while (r.stopReason().orElse(null) == BetaStopReason.PAUSE_TURN && continuations < 3) {
                 // Поиск ещё идёт: отправляем ответ обратно, сервер продолжит с того же места.
                 params = params.toBuilder().addMessage(r).build()
-                r = c.beta().messages().create(params)
+                r = stream(c, params, splitter)
                 continuations++
             }
             r
@@ -83,6 +91,7 @@ class Brain(
         }
 
         if (response.stopReason().orElse(null) == BetaStopReason.REFUSAL) return I18n.t(lang, "refusal")
+        splitter.flush()
 
         val text = response.content().mapNotNull { block -> block.text().orElse(null)?.text() }
             .joinToString("").trim()
@@ -93,5 +102,18 @@ class Brain(
         history += BetaMessageParam.builder().role(BetaMessageParam.Role.ASSISTANT).content(text).build()
         while (history.size > historyTurns * 2) history.removeAt(0)
         return text
+    }
+
+    private fun stream(c: AnthropicClient, params: MessageCreateParams, splitter: SentenceSplitter): BetaMessage {
+        val acc = BetaMessageAccumulator.create()
+        c.beta().messages().createStreaming(params).use { events ->
+            events.stream().forEach { event ->
+                acc.accumulate(event)
+                event.contentBlockDelta().flatMap { it.delta().text() }.ifPresent { splitter.add(it.text()) }
+                // Перед поиском в интернете договариваем то, что уже написано.
+                event.contentBlockStart().ifPresent { if (!it.contentBlock().isText()) splitter.flush() }
+            }
+        }
+        return acc.message()
     }
 }
