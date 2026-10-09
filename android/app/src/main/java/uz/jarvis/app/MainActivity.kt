@@ -273,13 +273,13 @@ class MainActivity : Activity() {
         val best = voices
             .filter { it.locale.language == locale.language }
             .filter { TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
-            .maxWithOrNull(compareBy(
+            .maxWithOrNull(compareBy<android.speech.tts.Voice>(
                 { it.locale.country == locale.country },
                 { it.quality },
                 { !it.isNetworkConnectionRequired },
                 { it.latency <= android.speech.tts.Voice.LATENCY_NORMAL },
             )) ?: return
-        t.voice = best
+        t.setVoice(best)
     }
 
     /** Сказать фразу целиком, прервав то, что говорилось раньше. */
