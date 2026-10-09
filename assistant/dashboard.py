@@ -382,8 +382,10 @@ class Dashboard:
         if self.closed:
             self.root.destroy()
             return
-        self._draw_dynamic(time.monotonic())
-        self.root.after(1000 // FPS, self._tick)
+        started = time.monotonic()
+        self._draw_dynamic(started)
+        spent = int((time.monotonic() - started) * 1000)
+        self.root.after(max(1, 1000 // FPS - spent), self._tick)  # ровный темп, даже если кадр рисуется долго
 
     def _slow_tick(self) -> None:
         if self.closed:
@@ -450,15 +452,17 @@ class Dashboard:
         if extra:
             self.text(x2 - 18, y1 + 24, text=extra, anchor="e", fill=DIM, font=self.font(10.5))
 
+    def row_frame(self, x1, y1, x2, y2, color: str):
+        """Цветная рамка вокруг строки списка с яркой полоской слева."""
+        frame = self.rrect(x1, y1, x2, y2, 7, tag="slow", fill=blend(PANEL, color, 0.07),
+                           outline=blend(PANEL, color, 0.6), width=max(1, int(self.s)))
+        self.rrect(x1 + 3, y1 + 5, x1 + 6, y2 - 5, 1.5, tag="slow", fill=color, outline="")
+        return frame
+
     # --- статичный слой: фон, рамки панелей, кнопки --------------------------------
     def _draw_static(self) -> None:
         c = self.canvas
         c.delete("all")
-        width, height = self._size
-        for gx in range(0, int(width) + 1, max(8, int(40 * self.s))):
-            c.create_line(gx, 0, gx, height, fill=GRID, tags="static")
-        for gy in range(0, int(height) + 1, max(8, int(40 * self.s))):
-            c.create_line(0, gy, width, gy, fill=GRID, tags="static")
 
         # Верхняя полоса.
         self.rrect(10, 8, 1270, 60, 12, fill=BAR, outline=BORDER)
@@ -587,11 +591,12 @@ class Dashboard:
         ]
         for i, (key, value, color) in enumerate(rows):
             y = 70 + 52 + i * 36
-            self.rrect(30, y - 14, 58, y + 14, 7, tag="slow", fill=ICON_BG, outline="")
+            self.row_frame(24, y - 16, 294, y + 16, color)
+            self.rrect(32, y - 12, 56, y + 12, 6, tag="slow", fill=ICON_BG, outline="")
             self.oval(44, y, 6, tag="slow", fill="", outline=color, width=max(1, int(2 * self.s)))
             self.text(68, y - 6, tag="slow", text=texts[key], anchor="w", fill=TEXT, font=self.font(12))
             self.text(68, y + 9, tag="slow", text=value, anchor="w", fill=color, font=self.font(10.5))
-            self.oval(284, y, 3.5, tag="slow", fill=color, outline="")
+            self.oval(282, y, 3.5, tag="slow", fill=color, outline="")
 
     def _draw_voice_texts(self, texts) -> None:
         color = STATES[self.state][0]
@@ -649,7 +654,7 @@ class Dashboard:
                 break
             color = ACCENT if who == "user" else GREEN
             label = texts["you"] if who == "user" else self.name
-            self.rrect(994, y - 2, 1022, y + 26, 7, tag="slow", fill=ICON_BG, outline="")
+            first = self.rrect(994, y - 2, 1022, y + 26, 7, tag="slow", fill=ICON_BG, outline="")
             self.text(1008, y + 12, tag="slow", text=label[:1].upper(), fill=color, font=self.font(13, True))
             self.text(1032, y + 3, tag="slow", text=label, anchor="w", fill=color, font=self.font(11, True))
             self.text(1250, y + 3, tag="slow", text=when, anchor="e", fill=DIM, font=self.font(10))
@@ -660,7 +665,9 @@ class Dashboard:
             if y + 14 + height > bottom:
                 self.canvas.delete(item)
                 break
-            y += 14 + height + 14
+            frame = self.row_frame(988, y - 7, 1258, y + 18 + height, color)
+            self.canvas.tag_lower(frame, first)
+            y += 14 + height + 18
 
     def _draw_markets(self, texts) -> None:
         if self.markets.updated:
@@ -671,14 +678,64 @@ class Dashboard:
         for i, quote in enumerate(self.markets.quotes):
             y = 528 + i * 30
             label = texts["gold"] if quote.label == "Золото" else quote.label
-            self.text(998, y, tag="slow", text=label, anchor="w", fill=TEXT, font=self.font(12))
+            color = ACCENT if quote.change is None else GREEN if quote.change >= 0 else RED
+            self.row_frame(990, y - 13, 1256, y + 13, color)
+            self.text(1000, y, tag="slow", text=label, anchor="w", fill=TEXT, font=self.font(12))
             self.text(1176, y, tag="slow", text=quote.text, anchor="e", fill=TEXT, font=self.num_font(12.5))
             if quote.change is not None:
                 up = quote.change >= 0
                 self.text(1248, y, tag="slow", text=f"{'▲' if up else '▼'} {abs(quote.change):.1f}%", anchor="e",
                           fill=GREEN if up else RED, font=self.num_font(10.5, False))
-            if i < len(self.markets.quotes) - 1:
-                self.line(996, y + 15, 1248, y + 15, tag="slow", fill=ROW_LINE)
+
+    PANELS = ((16, 72, 300, 340), (16, 352, 300, 744), (312, 72, 968, 470), (312, 482, 636, 744),
+              (648, 482, 968, 744), (980, 72, 1264, 470), (980, 482, 1264, 744))
+
+    def _draw_ambient(self, now: float, color: str) -> None:
+        """Общее движение по всему окну: плывущая сетка с искрами, огоньки по рамкам и луч сканера."""
+        width, height = self._size
+        step = 40 * self.s
+        shift = (now * 14 * self.s) % step
+        grid = blend(BG, color, 0.16)
+        x = -step + shift
+        while x < width:
+            self.canvas.create_line(x, 0, x, height, fill=grid, tags=("dyn", "bg"))
+            x += step
+        y = -step + shift * 0.6
+        while y < height:
+            self.canvas.create_line(0, y, width, y, fill=grid, tags=("dyn", "bg"))
+            y += step
+        rnd = random.Random(3)
+        for _ in range(40):  # искры плывут вверх и мерцают
+            px = rnd.uniform(0, BASE_W)
+            speed = rnd.uniform(8, 25)
+            py = BASE_H - ((now * speed + rnd.uniform(0, BASE_H)) % (BASE_H + 20))
+            glow = 0.3 + 0.5 * abs(math.sin(now * rnd.uniform(0.5, 2) + px))
+            self.oval(px, py, rnd.uniform(1.0, 2.2), tag=("dyn", "bg"), fill=blend(BG, mix(color, 1.3), glow),
+                      outline="")
+
+        # Огоньки бегут по рамкам панелей.
+        for k, (x1, y1, x2, y2) in enumerate(self.PANELS):
+            perimeter = 2 * ((x2 - x1) + (y2 - y1))
+            start = (now * 120 + k * 260) % perimeter
+            pts = []
+            for d in range(0, 90, 6):
+                pos = (start + d) % perimeter
+                if pos < x2 - x1:
+                    pts += [x1 + pos, y1]
+                elif pos < (x2 - x1) + (y2 - y1):
+                    pts += [x2, y1 + pos - (x2 - x1)]
+                elif pos < 2 * (x2 - x1) + (y2 - y1):
+                    pts += [x2 - (pos - (x2 - x1) - (y2 - y1)), y2]
+                else:
+                    pts += [x1, y2 - (pos - 2 * (x2 - x1) - (y2 - y1))]
+            self.line(*pts, tag="dyn", fill=mix(color, 1.2), width=max(2, int(2 * self.s)))
+
+        # Луч сканера проходит сверху вниз через всё окно.
+        scan_y = (now * 90) % (BASE_H + 160) - 80
+        for i, k in enumerate((0.55, 0.3, 0.16, 0.08)):
+            y = scan_y - i * 5
+            if 0 <= y <= BASE_H:
+                self.line(0, y, BASE_W, y, tag="dyn", fill=blend(PANEL, color, k), width=max(1, int(self.s)))
 
     # --- быстрый слой: глобус и волна (каждый кадр) ---------------------------------
     def _draw_dynamic(self, now: float) -> None:
@@ -800,5 +857,7 @@ class Dashboard:
             fade = 1 - abs(i - 15) / 17
             self.line(x, 462 - h / 2, x, 462 + h / 2, tag="dyn", fill=blend(PANEL, color, 0.35 + 0.6 * fade),
                       width=max(2, int(3 * self.s)), capstyle="round")
+        self._draw_ambient(now, color)
         c.tag_lower("dyn", "slow")
         c.tag_raise("dyn", "static")
+        c.tag_lower("bg")  # фон — под всеми панелями
