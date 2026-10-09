@@ -1,3 +1,5 @@
+import sys
+import types
 from types import SimpleNamespace as NS
 
 from assistant.brain import Brain
@@ -49,6 +51,13 @@ class FakeStream:
 
 def make_brain(monkeypatch, *streams):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:  # в CI пакета нет: хватит пустых классов ошибок
+        stub = types.ModuleType("anthropic")
+        for name in ("AuthenticationError", "RateLimitError", "APIStatusError", "APIConnectionError"):
+            setattr(stub, name, type(name, (Exception,), {}))
+        monkeypatch.setitem(sys.modules, "anthropic", stub)
     brain = Brain("Kartal", {})
     calls = []
     queue = list(streams)
