@@ -107,7 +107,15 @@ def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
 
     from .ui import HudIO, HudWindow
 
-    hud = HudWindow(config.name, lang_code(config.language), ui_settings.get("always_on_top", True))
+    lang = lang_code(config.language)
+    if ui_settings.get("style", "dashboard") == "compact":
+        hud = HudWindow(config.name, lang, ui_settings.get("always_on_top", True))
+    else:
+        from .dashboard import Dashboard
+
+        hud = Dashboard(config.name, lang, model=brain.model, has_key=brain.available, web_search=brain.web_search,
+                        memory=lambda: len(brain.history) // 2,
+                        always_on_top=ui_settings.get("always_on_top", False))
 
     def worker():
         try:
@@ -116,6 +124,7 @@ def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
         except Exception as exc:  # покажем ошибку в окне, а не молча закроемся
             print(f"Ошибка: {exc}")
             hud.set_caption(f"Ошибка: {exc}")
+            hud.log("bot", f"Ошибка: {exc}")
             return
         hud.close()
 

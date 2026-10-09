@@ -77,6 +77,15 @@ class HudWindow:
     def set_language(self, lang: str) -> None:
         self.events.put(("lang", lang))
 
+    def log(self, who: str, text: str) -> None:
+        pass  # в маленьком окне ленты нет, только подпись
+
+    def take_command(self) -> str | None:
+        return None
+
+    def take_armed(self) -> bool:
+        return False
+
     def close(self) -> None:
         self.events.put(("close", None))
 
@@ -174,9 +183,13 @@ class HudWindow:
 
 
 class HudIO:
-    """Обёртка над TextIO/VoiceIO: делает то же самое и показывает это в окне."""
+    """Обёртка над TextIO/VoiceIO: делает то же самое и показывает это в окне.
 
-    def __init__(self, inner, hud: HudWindow):
+    Команды, набранные или нажатые в окне, идут ассистенту так, будто к нему
+    обратились по имени, — обращаться к нему ещё раз не нужно.
+    """
+
+    def __init__(self, inner, hud):
         self.inner = inner
         self.hud = hud
         self.name = inner.name
@@ -190,17 +203,35 @@ class HudIO:
         self.inner.set_language(lang)
         self.hud.set_language(self.inner.lang)
 
+    def _from_window(self) -> str | None:
+        typed = self.hud.take_command()
+        if not typed:
+            return None
+        self.hud.log("user", typed)
+        self.hud.set_state("thinking")
+        return f"{self.name} {typed}"
+
     def listen(self) -> str | None:
+        typed = self._from_window()
+        if typed:
+            return typed
         self.hud.set_state("listening")
         heard = self.inner.listen()
+        typed = self._from_window()  # пока слушали, в окне могли набрать команду
+        if typed:
+            return typed
         self.hud.set_state("thinking" if heard else "idle")
         if heard:
             self.hud.set_caption(heard)
+            self.hud.log("user", heard)
+            if self.hud.take_armed():  # нажали кнопку микрофона — имя говорить не нужно
+                heard = f"{self.name} {heard}"
         return heard
 
     def say(self, text: str) -> None:
         self.hud.set_state("speaking")
         self.hud.set_caption(text)
+        self.hud.log("bot", text)
         try:
             self.inner.say(text)
         finally:

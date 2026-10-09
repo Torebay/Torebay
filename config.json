@@ -6,7 +6,8 @@
 
   "ui": {
     "enabled": true,
-    "always_on_top": true
+    "style": "dashboard",
+    "always_on_top": false
   },
 
   "voice": {
