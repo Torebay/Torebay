@@ -115,7 +115,8 @@ def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
 
         hud = Dashboard(config.name, lang, model=brain.model, has_key=brain.available, web_search=brain.web_search,
                         memory=lambda: len(brain.history) // 2,
-                        always_on_top=ui_settings.get("always_on_top", False))
+                        always_on_top=ui_settings.get("always_on_top", False),
+                        theme=ui_settings.get("theme", "green"))
 
     def worker():
         try:
