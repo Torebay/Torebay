@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .config import ROOT
+from .config import DATA_ROOT
 
-DEFAULT_PATH = ROOT / "memory.json"
+DEFAULT_PATH = DATA_ROOT / "memory.json"
 MAX_FACTS = 50
 
 

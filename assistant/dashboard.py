@@ -247,6 +247,8 @@ class Dashboard:
         self.globe_points = sphere_points(90)
 
         self.root = tk.Tk()
+        from .branding import apply_icon
+        apply_icon(self.root)
         self.root.title(f"{name} — {UI_TEXT[self.lang]['center'].title()}")
         self.root.configure(bg=BG)
         screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
@@ -370,6 +372,12 @@ class Dashboard:
                     self._placeholder(True)
             elif kind == "feed":
                 who, text, append = value
+                if hasattr(self, "transcript"):
+                    if append and self.transcript:
+                        self.transcript[-1] += " " + text
+                    else:
+                        self.transcript.append(("Вы: " if who == "user" else self.name + ": ") + text)
+                    del self.transcript[:-100]
                 text = " ".join(text.split())
                 if append and self.feed and self.feed[0][1] == who:
                     when, _, previous = self.feed.pop(0)
@@ -571,7 +579,7 @@ class Dashboard:
         self.text(1053, 34, tag="slow", text=self.lang.upper(), fill=ACCENT, font=self.font(12, True))
         self.rrect(1098, 18, 1258, 50, 8, tag="slow", fill=CHIP, outline=BORDER)
         self.oval(1114, 34, 4, tag="slow", fill=GREEN if self.has_key else RED, outline="")
-        self.text(1124, 34, tag="slow", text="Claude AI", anchor="w", fill=TEXT, font=self.font(12, True))
+        self.text(1124, 34, tag="slow", text=getattr(self, "provider_label", "ИИ"), anchor="w", fill=TEXT, font=self.font(12, True))
 
         self._draw_core_panel(texts)
         self._draw_voice_texts(texts)
@@ -587,7 +595,7 @@ class Dashboard:
 
     def _draw_core_panel(self, texts) -> None:
         rows = [
-            ("brain", texts["brain_ok"] if self.has_key else texts["brain_off"], GREEN if self.has_key else RED),
+            ("brain", "ключ добавлен" if self.has_key else texts["brain_off"], GREEN if self.has_key else RED),
             ("voice_row", texts["states"][self.state], STATES[self.state][0]),
             ("search_row", texts["on"] if self.web_search else texts["off"], GREEN if self.web_search else DIM),
             ("lang_row", texts["language"], ACCENT),
@@ -599,7 +607,7 @@ class Dashboard:
             self.row_frame(24, y - 16, 294, y + 16, color)
             self.rrect(32, y - 12, 56, y + 12, 6, tag="slow", fill=ICON_BG, outline="")
             self.oval(44, y, 6, tag="slow", fill="", outline=color, width=max(1, int(2 * self.s)))
-            self.text(68, y - 6, tag="slow", text=texts[key], anchor="w", fill=TEXT, font=self.font(12))
+            self.text(68, y - 6, tag="slow", text=getattr(self, "provider_label", "ИИ") if key == "brain" else texts[key], anchor="w", fill=TEXT, font=self.font(12))
             self.text(68, y + 9, tag="slow", text=value, anchor="w", fill=color, font=self.font(10.5))
             self.oval(282, y, 3.5, tag="slow", fill=color, outline="")
 
@@ -681,18 +689,20 @@ class Dashboard:
             extra = f"{texts['updated']} {datetime.datetime.fromtimestamp(self.markets.updated):%H:%M}"
         else:
             extra = texts["loading"] if self.markets.online is None else self.t("offline").lower()
+        currency = next((q for q in self.markets.quotes if q.label == "USD → UZS" and q.value is not None), None)
+        if currency and currency.date:
+            extra = f"ЦБ: {currency.date}"
         self.text(1246, 506, tag="slow", text=extra, anchor="e", fill=DIM, font=self.font(10))
         for i, quote in enumerate(self.markets.quotes):
             y = 528 + i * 30
             label = texts["gold"] if quote.label == "Золото" else quote.label
-            color = ACCENT if quote.change is None else GREEN if quote.change >= 0 else RED
+            color = DIM if not quote.change else GREEN if quote.change > 0 else RED
             self.row_frame(990, y - 13, 1256, y + 13, color)
             self.text(1000, y, tag="slow", text=label, anchor="w", fill=TEXT, font=self.font(12))
             self.text(1176, y, tag="slow", text=quote.text, anchor="e", fill=TEXT, font=self.num_font(12.5))
             if quote.change is not None:
-                up = quote.change >= 0
-                self.text(1248, y, tag="slow", text=f"{'▲' if up else '▼'} {abs(quote.change):.1f}%", anchor="e",
-                          fill=GREEN if up else RED, font=self.num_font(10.5, False))
+                self.text(1248, y, tag="slow", text=f"{quote.change:+.2f}%", anchor="e",
+                          fill=color, font=self.num_font(10.5, False))
 
     PANELS = ((16, 72, 300, 340), (16, 352, 300, 744), (312, 72, 968, 470), (312, 482, 636, 744),
               (648, 482, 968, 744), (980, 72, 1264, 470), (980, 482, 1264, 744))

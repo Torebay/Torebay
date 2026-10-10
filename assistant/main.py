@@ -8,7 +8,9 @@ import queue
 import threading
 
 from . import apps
-from .brain import Brain
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .brain import Brain
 from .commands import parse, strip_wake_word
 from .config import load_config, load_env
 from .i18n import format_date, lang_code, t
@@ -20,6 +22,11 @@ def handle(text: str, config, brain: Brain, io) -> tuple[str | None, bool]:
     command = parse(text)
     lang = io.lang
     now = datetime.datetime.now()
+
+    from .local_commands import handle_local
+    local = handle_local(text, getattr(brain, "tools", None))
+    if local is not None:
+        return local, True
 
     if command.action == "exit":
         return t(lang, "bye"), False
@@ -44,7 +51,7 @@ def handle(text: str, config, brain: Brain, io) -> tuple[str | None, bool]:
             return apps.youtube_search(command.arg, lang), True
     except Exception as exc:  # программа не открылась — не роняем ассистента
         return t(lang, "failed", x=exc), True
-    return ask_aloud(brain, command.arg, lang, io), True
+    return ask_aloud(brain, text, lang, io), True
 
 
 def ask_aloud(brain: Brain, question: str, lang: str, io) -> str | None:
@@ -83,7 +90,12 @@ def run(io, config, brain: Brain) -> None:
         if not heard:
             continue
 
-        called, rest = strip_wake_word(heard, config.all_wake_words)
+        if hasattr(heard, "original_text"):
+            called, rest = True, heard.original_text
+        elif not config.require_wake_word:
+            called, rest = True, heard
+        else:
+            called, rest = strip_wake_word(heard, config.all_wake_words)
         if config.require_wake_word and not called and not waiting_for_command:
             continue  # фраза была не для ассистента
         if called and not rest:
@@ -105,23 +117,30 @@ def main() -> None:
     parser.add_argument("--lang", choices=["ru", "uz", "tr"], help="язык при запуске")
     parser.add_argument("--config", default=None, help="путь к config.json")
     parser.add_argument("--no-ui", action="store_true", help="без анимированного окна")
+    parser.add_argument("--settings", action="store_true", help="открыть настройки после запуска")
     args = parser.parse_args()
 
     load_env()
     config = load_config(args.config) if args.config else load_config()
     lang = lang_code(args.lang or config.language)
+    config.language = lang
     from .memory import Memory
     from .pc_tools import PcTools
 
     memory = Memory()  # memory.json рядом с config.json: разговор и факты переживают перезапуск
-    tools = PcTools(memory) if config.claude.get("pc_control", True) else None
-    brain = Brain(config.name, config.claude, memory=memory, tools=tools)
+    tools = PcTools(memory)
+    from .providers import ProviderBrain
+    from .secrets import get_key
+    brain = ProviderBrain(config.name, config.ai, memory=memory, tools=tools, key_reader=get_key)
 
     def make_io():
         if args.text:
             from .speech import TextIO
 
             config.require_wake_word = False  # в текстовом режиме обращаться по имени не нужно
+            if not args.no_ui and config.ui.get("enabled", True):
+                from .speech import WindowIO
+                return WindowIO(config.name, lang)
             return TextIO(config.name, lang)
         from .speech import VoiceIO
 
@@ -135,10 +154,10 @@ def main() -> None:
             print()
         return
 
-    run_with_window(make_io, config, brain, ui_settings)
+    run_with_window(make_io, config, brain, ui_settings, args.config, args.settings)
 
 
-def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
+def run_with_window(make_io, config, brain: Brain, ui_settings: dict, config_path=None, open_settings=False) -> None:
     """Окно крутится в главном потоке, а ассистент слушает и отвечает в соседнем."""
     from .ui import HudIO, HudWindow
 
@@ -152,11 +171,25 @@ def run_with_window(make_io, config, brain: Brain, ui_settings: dict) -> None:
                         memory=lambda: len(brain.history) // 2,
                         always_on_top=ui_settings.get("always_on_top", False),
                         theme=ui_settings.get("theme", "green"))
+        from .desktop_menu import install_menu
+        install_menu(hud, config, brain, config_path)
+        if open_settings:
+            from .settings import show_settings
+            from .config import DEFAULT_CONFIG_PATH
+            hud.root.after(500, lambda: show_settings(hud, config, brain, config_path or DEFAULT_CONFIG_PATH))
 
     def worker():
         try:
             # Микрофон и голос создаём в этом же потоке: так голос Windows работает надёжнее.
-            run(HudIO(make_io(), hud), config, brain)
+            try:
+                inner = make_io()
+            except Exception:
+                from .speech import WindowIO
+                inner = WindowIO(config.name, lang)
+                hud.log("bot", "Микрофон или голос недоступен. Можно вводить команды в строке внизу.")
+            io = HudIO(inner, hud)
+            io.voice_settings = config.voice
+            run(io, config, brain)
         except Exception as exc:  # покажем ошибку в окне, а не молча закроемся
             print(f"Ошибка: {exc}")
             hud.set_caption(f"Ошибка: {exc}")

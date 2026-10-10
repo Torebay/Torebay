@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG_PATH = ROOT / "config.json"
+DATA_ROOT = Path(os.environ.get("LOCALAPPDATA", str(ROOT))) / "Kartal" if getattr(sys, "frozen", False) else ROOT
+DEFAULT_CONFIG_PATH = DATA_ROOT / "config.json"
 
 
 @dataclass
@@ -19,6 +21,7 @@ class Config:
     language: str = "ru-RU"
     voice: dict = field(default_factory=dict)
     claude: dict = field(default_factory=dict)
+    ai: dict = field(default_factory=dict)
     apps: dict = field(default_factory=dict)
     ui: dict = field(default_factory=dict)
 
@@ -43,6 +46,10 @@ def load_env(path: Path = ROOT / ".env") -> None:
 
 
 def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> Config:
+    if Path(path) == DEFAULT_CONFIG_PATH and not Path(path).exists() and DATA_ROOT != ROOT:
+        DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copyfile(ROOT / "config.json", path)
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     known = {k: v for k, v in data.items() if k in Config.__dataclass_fields__}
     return Config(**known)

@@ -2,6 +2,7 @@ name: Android APK
 
 on:
   push:
+    branches-ignore: [kartal-1.2.0]
     paths:
       - "android/**"
       - ".github/workflows/android.yml"

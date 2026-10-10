@@ -29,7 +29,7 @@ import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
 import uz.jarvis.core.Action
-import uz.jarvis.core.Brain
+import uz.jarvis.core.MobileBrain
 import uz.jarvis.core.Commands
 import uz.jarvis.core.I18n
 import uz.jarvis.core.SpeechText
@@ -45,6 +45,7 @@ class MainActivity : Activity() {
 
     private lateinit var hud: HudView
     private lateinit var caption: TextView
+    private lateinit var providerStatus: TextView
     private lateinit var input: EditText
 
     private var recognizer: SpeechRecognizer? = null
@@ -54,7 +55,9 @@ class MainActivity : Activity() {
     private val pendingSpeech = mutableSetOf<String>()
     private var answerStreaming = false
     private var answerId = 0
-    private var brain: Brain? = null
+    private var brain: MobileBrain? = null
+    private val secureKeys by lazy { SecureKeys(this) }
+    private val cloudSpeech = CloudSpeech()
 
     private var lang = I18n.DEFAULT
     private var listening = false
@@ -93,7 +96,7 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
-        if (prefs.getString("api_key", "").isNullOrBlank()) main.postDelayed({ showSettings() }, 600)
+
     }
 
     override fun onResume() {
@@ -112,6 +115,8 @@ class MainActivity : Activity() {
         super.onDestroy()
         recognizer?.destroy()
         tts?.shutdown()
+        cloudSpeech.close()
+        main.removeCallbacksAndMessages(null)
         worker.shutdownNow()
     }
 
@@ -120,55 +125,158 @@ class MainActivity : Activity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun buildUi() {
+        val green = Color.rgb(30, 211, 122)
+        val pale = Color.rgb(212, 247, 226)
+        val muted = Color.rgb(94, 154, 120)
+        fun panel() = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.rgb(4, 33, 11)); cornerRadius = dp(12).toFloat()
+            setStroke(dp(1), Color.rgb(13, 80, 31))
+        }
+        fun label(value: String, size: Float, color: Int = pale) = TextView(this).apply {
+            text = value; textSize = size; setTextColor(color)
+        }
+        fun card(title: String) = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; background = panel()
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            addView(label(title, 10f, muted))
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(2, 20, 6))
+        }
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
+                insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            insets
+        }
+        val header = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(18), dp(12), dp(12), dp(8))
+            addView(android.widget.ImageView(this@MainActivity).apply {
+                setImageResource(uz.jarvis.app.R.drawable.ic_launcher)
+                contentDescription = "Kartal"
+            }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { rightMargin = dp(12) })
+            val brand = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label(name.uppercase(), 23f, green))
+                addView(label("КОМАНДНЫЙ ЦЕНТР", 10f, muted))
+            }
+            addView(brand, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@MainActivity).apply {
+                text = "НАСТРОЙКИ"; textSize = 11f; setTextColor(green)
+                gravity = Gravity.CENTER; minHeight = dp(48); setPadding(dp(12), 0, dp(12), 0)
+                contentDescription = "Настройки ассистента и ИИ"
+                setOnClickListener { showSettings() }
+            })
+        }
+        root.addView(header)
+        val scroll = android.widget.ScrollView(this).apply { isFillViewport = true }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(12))
+        }
+        fun addCard(view: android.view.View) {
+            body.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+        }
+        val statusRow = LinearLayout(this)
+        val core = card("ЯДРО ИИ").apply {
+            providerStatus = label("Gemini / OpenAI", 15f, green)
+            addView(providerStatus)
+            addView(label("RU · UZ · TR", 10f, muted))
+        }
+        val system = card("ТЕЛЕФОН").apply {
+            val battery = getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+            val percent = battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            addView(label(if (percent in 0..100) "Батарея $percent%" else "Android", 15f))
+            addView(android.widget.TextClock(this@MainActivity).apply {
+                format24Hour = "HH:mm · dd.MM.yyyy"; format12Hour = "HH:mm · dd.MM.yyyy"
+                setTextColor(muted); textSize = 10f
+            })
+        }
+        statusRow.addView(core, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(8) })
+        statusRow.addView(system, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addCard(statusRow)
+        val rates = card("КУРСЫ ВАЛЮТ · ЦБ УЗБЕКИСТАНА")
+        val rateRows = List(3) { label("Загрузка…", 14f).also { rates.addView(it) } }
+        val rateDate = label("Изменение к предыдущей публикации", 10f, muted)
+        rates.addView(rateDate)
+        addCard(rates)
+        fun refreshRates() {
+            worker.execute {
+                val quotes = runCatching { uz.jarvis.core.LiveData.currencies() }.getOrNull()
+                main.post {
+                    if (isDestroyed) return@post
+                    rateRows.forEachIndexed { i, row ->
+                        val quote = quotes?.getOrNull(i)
+                        row.text = quote?.text() ?: "Данные недоступны"
+                        row.setTextColor(when {
+                            quote == null || quote.change == 0.0 -> muted
+                            quote.change < 0 -> Color.rgb(255, 90, 90)
+                            else -> green
+                        })
+                    }
+                    rateDate.text = "${quotes?.firstOrNull()?.date.orEmpty()} · USD/RUB — кросс-курс"
+                    main.postDelayed({ if (!isDestroyed) refreshRates() }, 300000)
+                }
+            }
+        }
+        refreshRates()
         hud = HudView(this).apply {
-            title = name
-            status = I18n.t(lang, "status_idle")
+            title = name; status = I18n.t(lang, "status_idle")
             setOnClickListener { if (listening) stopListening() else startListening() }
         }
-        caption = TextView(this).apply {
-            setTextColor(Color.rgb(207, 239, 255))
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setPadding(dp(20), 0, dp(20), 0)
-        }
-        input = EditText(this).apply {
-            hint = "…"
-            setHintTextColor(Color.rgb(70, 110, 130))
-            setTextColor(Color.WHITE)
-            setSingleLine()
-            imeOptions = EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { v, actionId, event ->
-                val send = actionId == EditorInfo.IME_ACTION_SEND ||
-                    (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
-                if (send && v.text.isNotBlank()) {
-                    val text = v.text.toString()
-                    v.text = ""
-                    onHeard(text, typed = true)
+        val globe = card("ГОЛОСОВОЙ АССИСТЕНТ")
+        globe.addView(hud, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300)))
+        globe.addView(label("Нажмите на глобус и говорите", 11f, muted).apply { gravity = Gravity.CENTER })
+        addCard(globe)
+        val quick = card("БЫСТРЫЕ КОМАНДЫ")
+        val commands = listOf("Telegram" to "открой телеграм", "YouTube" to "открой ютуб",
+            "Время" to "который час", "Погода" to "погода",
+            "Курс валют" to "Какой сейчас курс доллара к рублю и суму?", "Криптовалюты" to "Какова текущая цена Bitcoin и Ethereum?")
+        for (pair in commands.chunked(2)) {
+            val row = LinearLayout(this)
+            for ((title, command) in pair) {
+                val button = android.widget.Button(this).apply {
+                    text = title; isAllCaps = false; textSize = 12f; setTextColor(pale)
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(5, 43, 15))
+                    setOnClickListener { onHeard(command, typed = true) }
                 }
+                row.addView(button, LinearLayout.LayoutParams(0, dp(48), 1f))
+            }
+            quick.addView(row)
+        }
+        addCard(quick)
+        caption = label("Kartal готов. Напишите команду или нажмите на глобус.", 14f).apply {
+            setPadding(0, dp(8), 0, dp(8)); setTextIsSelectable(true)
+        }
+        addCard(card("ДИАЛОГ").apply { addView(caption) })
+        scroll.addView(body)
+        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        input = EditText(this).apply {
+            hint = "Напишите команду…"; setHintTextColor(muted); setTextColor(pale)
+            textSize = 14f; setSingleLine(); imeOptions = EditorInfo.IME_ACTION_SEND
+            backgroundTintList = android.content.res.ColorStateList.valueOf(green)
+            setOnEditorActionListener { _, action, event ->
+                val send = action == EditorInfo.IME_ACTION_SEND ||
+                    (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
+                if (send) submitText()
                 send
             }
         }
-        val settings = TextView(this).apply {
-            text = "⚙"
-            textSize = 26f
-            setTextColor(Color.rgb(0, 180, 216))
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setOnClickListener { showSettings() }
+        val composer = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(8))
+            addView(input, LinearLayout.LayoutParams(0, dp(52), 1f))
+            addView(android.widget.Button(this@MainActivity).apply {
+                text = "➤"; contentDescription = "Отправить команду"; setTextColor(green)
+                setOnClickListener { submitText() }
+            }, LinearLayout.LayoutParams(dp(56), dp(52)))
         }
-
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), 0, dp(16), dp(20))
-            addView(caption, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(12) })
-        }
-        val root = FrameLayout(this).apply {
-            addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(bottom, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
-            addView(settings, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END))
-        }
+        root.addView(composer)
         setContentView(root)
+        root.requestApplyInsets()
+    }
+
+    private fun submitText() {
+        val text = input.text.toString().trim()
+        if (text.isNotEmpty()) { input.setText(""); onHeard(text, typed = true) }
     }
 
     private fun setState(state: HudState) {
@@ -187,10 +295,22 @@ class MainActivity : Activity() {
         fun label(text: String) = TextView(this).apply { this.text = text; setPadding(0, dp(10), 0, 0) }
         val nameField = EditText(this).apply { setText(name) }
         val wakeField = EditText(this).apply { setText(prefs.getString("wake_words", DEFAULT_WAKE)) }
-        val keyField = EditText(this).apply {
-            setText(prefs.getString("api_key", ""))
-            hint = "sk-ant-..."
+        val providerNames = listOf("Gemini", "OpenAI")
+        val providers = listOf("gemini", "openai")
+        val providerSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, providerNames)
+            setSelection(providers.indexOf(prefs.getString("provider", "gemini")).coerceAtLeast(0))
+        }
+        val keyFields = providers.associateWith { provider -> EditText(this).apply {
+            setText(secureKeys.read(provider)); hint = "API-ключ $provider"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        } }
+        val modelFields = providers.associateWith { provider -> EditText(this).apply {
+            setText(prefs.getString(provider + "_model", "")); hint = "Выберите или введите модель"
+            setSingleLine()
+        } }
+        val searchSwitch = Switch(this).apply {
+            text = "Поиск ИИ в интернете"; isChecked = prefs.getBoolean("web_search", true)
         }
         val langNames = listOf("Русский", "O'zbekcha", "Türkçe")
         val langSpinner = Spinner(this).apply {
@@ -207,8 +327,53 @@ class MainActivity : Activity() {
         box.addView(wakeField)
         box.addView(label("Язык"))
         box.addView(langSpinner)
-        box.addView(label("Ключ Claude API (console.anthropic.com)"))
-        box.addView(keyField)
+        box.addView(label("Какой ИИ отвечает"))
+        box.addView(providerSpinner)
+        providers.forEachIndexed { index, provider ->
+            box.addView(label(providerNames[index] + " — ключ и модель"))
+            box.addView(keyFields.getValue(provider))
+            box.addView(modelFields.getValue(provider))
+            box.addView(android.widget.Button(this).apply {
+                text = "Загрузить модели " + providerNames[index]; isAllCaps = false
+                setOnClickListener {
+                    val key = keyFields.getValue(provider).text.toString().trim()
+                    isEnabled = false
+                    Thread {
+                        try {
+                            val models = MobileBrain.models(provider, key)
+                            main.post {
+                                if (!isFinishing && !isDestroyed) {
+                                    isEnabled = true
+                                    if (models.isEmpty()) AlertDialog.Builder(this@MainActivity).setMessage("Доступные модели не найдены.").setPositiveButton("OK", null).show()
+                                    else AlertDialog.Builder(this@MainActivity).setTitle("Модель " + providerNames[index])
+                                        .setItems(models.toTypedArray()) { _, selected -> modelFields.getValue(provider).setText(models[selected]) }.show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            main.post {
+                                if (!isFinishing && !isDestroyed) {
+                                    isEnabled = true
+                                    AlertDialog.Builder(this@MainActivity).setMessage(if (e is uz.jarvis.core.ApiFailure) e.message else "Нет связи с сервисом.")
+                                        .setPositiveButton("OK", null).show()
+                                }
+                            }
+                        }
+                    }.start()
+                }
+            })
+        }
+        box.addView(searchSwitch)
+        val cloudSwitch = Switch(this).apply {
+            text = "Нейроголос OpenAI (расходует API)"
+            isChecked = prefs.getBoolean("cloud_voice", false)
+        }
+        val voiceSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, listOf("cedar", "marin"))
+            setSelection(if (prefs.getString("openai_voice", "cedar") == "marin") 1 else 0)
+        }
+        box.addView(cloudSwitch)
+        box.addView(voiceSpinner)
+        box.addView(label("OpenAI — синтетический голос. Нужен ключ OpenAI. При недоступности используется голос телефона."))
         box.addView(alwaysSwitch.apply { setPadding(0, dp(14), 0, 0) })
         box.addView(android.widget.Button(this).apply {
             text = "Голос телефона (скачать качественный голос)"
@@ -226,10 +391,21 @@ class MainActivity : Activity() {
             .setTitle("Настройки")
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton("Сохранить") { _, _ ->
+                try {
+                    providers.forEach { secureKeys.save(it, keyFields.getValue(it).text.toString()) }
+                } catch (e: Exception) {
+                    caption.text = "Не удалось сохранить ключи в защищённом хранилище."
+                    return@setPositiveButton
+                }
                 prefs.edit()
                     .putString("name", nameField.text.toString().trim())
                     .putString("wake_words", wakeField.text.toString())
-                    .putString("api_key", keyField.text.toString().trim())
+                    .putString("provider", providers[providerSpinner.selectedItemPosition])
+                    .putString("gemini_model", modelFields.getValue("gemini").text.toString().trim())
+                    .putString("openai_model", modelFields.getValue("openai").text.toString().trim())
+                    .putBoolean("web_search", searchSwitch.isChecked)
+                    .putBoolean("cloud_voice", cloudSwitch.isChecked)
+                    .putString("openai_voice", if (voiceSpinner.selectedItemPosition == 1) "marin" else "cedar")
                     .putString("lang", I18n.LANGS[langSpinner.selectedItemPosition])
                     .putBoolean("always_listen", alwaysSwitch.isChecked)
                     .apply()
@@ -245,7 +421,12 @@ class MainActivity : Activity() {
     }
 
     private fun rebuildBrain() {
-        brain = Brain(name, prefs.getString("api_key", "") ?: "").also { it.importTurns(loadTurns()) }
+        val provider = prefs.getString("provider", "gemini") ?: "gemini"
+        brain = MobileBrain(name, provider, secureKeys.read(provider),
+            prefs.getString(provider + "_model", "").orEmpty(), prefs.getBoolean("web_search", true))
+            .also { it.importTurns(loadTurns()) }
+        providerStatus.text = (if (provider == "openai") "OpenAI" else "Gemini") +
+            if (brain?.available == true) " · ключ добавлен" else " · без ключа"
     }
 
     /** Разговор хранится в настройках приложения, чтобы пережить перезапуск. */
@@ -280,7 +461,7 @@ class MainActivity : Activity() {
                 break
             }
         }
-        t.setSpeechRate(1.0f)
+        t.setSpeechRate(0.95f)
         t.setPitch(1.0f)
     }
 
@@ -313,11 +494,19 @@ class MainActivity : Activity() {
         setState(HudState.SPEAKING)
         val clean = SpeechText.clean(text)
         val t = tts
-        if (!ttsReady || t == null || clean.isEmpty()) { speechFinished(null); return }
+        if (clean.isEmpty()) { speechFinished(null); return }
         stopListening()
+        if (mode == TextToSpeech.QUEUE_FLUSH) { cloudSpeech.cancel(); t?.stop() }
         val id = "kartal-" + System.nanoTime()
         pendingSpeech += id
-        t.speak(clean, mode, null, id)
+        fun localVoice() {
+            if (!ttsReady || t == null || t.speak(clean, TextToSpeech.QUEUE_ADD, null, id) == TextToSpeech.ERROR) speechFinished(id)
+        }
+        if (prefs.getBoolean("cloud_voice", false)) {
+            cloudSpeech.speak(clean, secureKeys.read("openai"), prefs.getString("openai_voice", "cedar") ?: "cedar",
+                done = { main.post { speechFinished(id) } },
+                fallback = { main.post { if (!isDestroyed) localVoice() } })
+        } else localVoice()
     }
 
     private fun speechFinished(id: String?) {
@@ -331,7 +520,7 @@ class MainActivity : Activity() {
     }
 
     private fun startListening() {
-        if (listening || isFinishing) return
+        if (listening || isFinishing || !resumed || answerStreaming) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
             return
@@ -395,7 +584,8 @@ class MainActivity : Activity() {
     // --- команды ---------------------------------------------------------------------
 
     private fun onHeard(heard: String, typed: Boolean) {
-        val (called, rest) = Commands.stripWakeWord(heard, wakeWords)
+        if (answerStreaming) { caption.text = "Дождитесь окончания ответа."; return }
+        val (called, rest) = if (typed) true to heard else Commands.stripWakeWord(heard, wakeWords)
         // В режиме «слушать всегда» реагируем только на обращение по имени.
         if (alwaysListen && !typed && !called && !waitingForCommand) {
             setState(HudState.IDLE)
@@ -413,6 +603,9 @@ class MainActivity : Activity() {
     }
 
     private fun handle(text: String) {
+        if (text.trim().lowercase() in listOf("проверь голос", "проверка голоса")) {
+            say("Привет! Я Картал. Проверяем чёткость речи: один, два, три. Готов к работе."); return
+        }
         val command = Commands.parse(text)
         val now = LocalDateTime.now()
         when (command.action) {
@@ -433,12 +626,15 @@ class MainActivity : Activity() {
             }
             Action.SEARCH -> { apps.webSearch(command.arg); say(I18n.t(lang, "search", command.arg)) }
             Action.YOUTUBE -> { apps.youtubeSearch(command.arg); say(I18n.t(lang, "youtube", command.arg)) }
-            Action.ASK -> ask(command.arg)
+            Action.ASK -> ask(text)
         }
     }
 
     private fun ask(question: String) {
         val b = brain ?: return
+        cloudSpeech.cancel()
+        tts?.stop()
+        stopListening()
         setState(HudState.THINKING)
         val askLang = lang
         answerStreaming = true

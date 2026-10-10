@@ -43,6 +43,16 @@ class TextIO:
         print(f"{self.name}: {text}" if not append else f"  {text}")
 
 
+class WindowIO(TextIO):
+    """Poll the window's command queue without blocking on a hidden console."""
+    window_only = True
+
+    def listen(self):
+        import time
+        time.sleep(0.1)
+        return None
+
+
 def play_mp3(path: str) -> None:
     """Проигрывает mp3 и ждёт конца. На Windows — встроенным MCI, без лишних программ."""
     if sys.platform != "win32":
@@ -120,12 +130,15 @@ class VoiceIO:
         self.name = name
         self.sr = sr
         self.recognizer = sr.Recognizer()
+        self.recognizer.operation_timeout = 8
         self.recognizer.pause_threshold = 0.6  # меньше ждём тишины после фразы
         self.microphone = sr.Microphone()
         with self.microphone as source:
             self.recognizer.adjust_for_ambient_noise(source, duration=1)
 
         voice = voice or {}
+        self.voice_settings = voice
+        self.cloud_voice = None
         self.edge = None
         if voice.get("engine", "edge") == "edge":
             try:
@@ -147,7 +160,7 @@ class VoiceIO:
         print("...")
         with self.microphone as source:
             try:
-                audio = self.recognizer.listen(source, timeout=8, phrase_time_limit=15)
+                audio = self.recognizer.listen(source, timeout=getattr(self, "listen_timeout", 1), phrase_time_limit=12)
             except self.sr.WaitTimeoutError:
                 return None
         try:
@@ -170,11 +183,21 @@ class VoiceIO:
         spoken = clean(text)
         if not spoken:
             return
+        if self.voice_settings.get("engine") == "openai":
+            if self.cloud_voice is None:
+                from .cloud_voice import OpenAIVoice
+                self.cloud_voice = OpenAIVoice(self.voice_settings)
+            try:
+                self.cloud_voice.say(spoken, self.lang)
+                return
+            except RuntimeError:
+                print("Нейроголос недоступен — используется голос Windows.")
         if self.edge is not None:
             try:
                 self.edge.say(spoken, self.lang)
                 return
             except Exception as exc:  # нет интернета или сервис не ответил — говорим голосом Windows
                 print(f"(нейроголос недоступен: {exc})")
+        self.engine.setProperty("rate", self.voice_settings.get("rate", 175))
         self.engine.say(spoken)
         self.engine.runAndWait()

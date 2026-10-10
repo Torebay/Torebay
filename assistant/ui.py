@@ -182,6 +182,13 @@ class HudWindow:
                       font=("Segoe UI", 11), justify="center")
 
 
+class WindowCommand(str):
+    def __new__(cls, text, name):
+        obj = super().__new__(cls, f"{name} {text}")
+        obj.original_text = text
+        return obj
+
+
 class HudIO:
     """Обёртка над TextIO/VoiceIO: делает то же самое и показывает это в окне.
 
@@ -209,14 +216,34 @@ class HudIO:
             return None
         self.hud.log("user", typed)
         self.hud.set_state("thinking")
-        return f"{self.name} {typed}"
+        return WindowCommand(typed, self.name)
 
     def listen(self) -> str | None:
+        if getattr(self.hud, "closed", False):
+            raise SystemExit
         typed = self._from_window()
         if typed:
             return typed
+        settings = getattr(self, "voice_settings", None)
+        if getattr(self.inner, "window_only", False):
+            self.hud.set_state("idle")
+            self.inner.listen()
+            return self._from_window()
+        armed = False
+        if settings is not None:
+            armed = self.hud.take_armed()
+            if not settings.get("always_listen", False) and not armed:
+                time.sleep(0.1)
+                return None
         self.hud.set_state("listening")
-        heard = self.inner.listen()
+        self.inner.listen_timeout = 5 if armed else 1
+        try:
+            heard = self.inner.listen()
+        except (OSError, RuntimeError):
+            self.hud.log("bot", "Микрофон недоступен. Введите команду текстом.")
+            from .speech import WindowIO
+            self.inner = WindowIO(self.name, self.lang)
+            return None
         typed = self._from_window()  # пока слушали, в окне могли набрать команду
         if typed:
             return typed
@@ -224,7 +251,7 @@ class HudIO:
         if heard:
             self.hud.set_caption(heard)
             self.hud.log("user", heard)
-            if self.hud.take_armed():  # нажали кнопку микрофона — имя говорить не нужно
+            if armed or self.hud.take_armed():  # нажали кнопку микрофона — имя говорить не нужно
                 heard = f"{self.name} {heard}"
         return heard
 

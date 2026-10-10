@@ -1,5 +1,14 @@
 @echo off
-chcp 65001 >nul
+
 cd /d "%~dp0"
-python -m assistant.main %*
-if errorlevel 1 pause
+
+if exist ".venv\Scripts\pythonw.exe" (
+
+  start "" ".venv\Scripts\pythonw.exe" "launch.pyw" %*
+
+) else (
+
+  start "" pythonw "launch.pyw" %*
+
+)
+
