@@ -1,4 +1,4 @@
-name: Android build
+name: PingBoost Android build
 
 # Собирает APK приложения PingBoost и прогоняет тесты ядра.
 # Готовый APK лежит в «Artifacts» внизу страницы запуска (вкладка Actions).
@@ -7,11 +7,11 @@ on:
   push:
     paths:
       - "booster/android/**"
-      - ".github/workflows/android.yml"
+      - ".github/workflows/pingboost-android.yml"
   pull_request:
     paths:
       - "booster/android/**"
-      - ".github/workflows/android.yml"
+      - ".github/workflows/pingboost-android.yml"
   workflow_dispatch:
 
 jobs:

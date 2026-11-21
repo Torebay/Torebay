@@ -74,7 +74,7 @@ SERVER_NAME="Германия" sudo -E bash pingboost.sh install
 
 APK собирает GitHub:
 
-1. Открой репозиторий на github.com → вкладка **Actions** → слева **Android build**.
+1. Открой репозиторий на github.com → вкладка **Actions** → слева **PingBoost Android build**.
 2. Выбери последний зелёный запуск → внизу в разделе **Artifacts** скачай **PingBoost-debug-apk**.
 3. Распакуй zip, скинь `app-debug.apk` на телефон, открой. Android спросит разрешение на установку
    из неизвестных источников, разреши.
