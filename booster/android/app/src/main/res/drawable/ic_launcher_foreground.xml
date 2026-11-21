@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Молния: символ ускорения. Весь значок лежит в центральных 66x66 «безопасной зоны». -->
+    <path
+        android:fillColor="#22E58B"
+        android:pathData="M58,26 L40,58 L52,58 L48,82 L68,48 L55,48 Z" />
+</vector>

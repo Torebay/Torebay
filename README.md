@@ -140,3 +140,8 @@ python -m pytest
 - `assistant/speech.py` — микрофон и голос
 - `assistant/i18n.py` — фразы ассистента на трёх языках
 - `config.json` — имя, программы и настройки
+
+## Другой проект в репозитории: PingBoost
+
+В папке [`booster/`](booster/README.md) лежит игровой бустер для PUBG Mobile на Android
+(аналог LagoFast): приложение + скрипт для твоих серверов. Инструкция: [`booster/README.md`](booster/README.md).
