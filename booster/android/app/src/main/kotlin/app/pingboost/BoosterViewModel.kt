@@ -1,11 +1,13 @@
 package app.pingboost
 
 import android.app.Application
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.pingboost.core.ProbeResult
 import app.pingboost.core.PubgGames
+import app.pingboost.core.Readiness
 import app.pingboost.core.RollingProbeWindow
 import app.pingboost.core.ServerPicker
 import app.pingboost.core.UdpEchoClient
@@ -13,6 +15,7 @@ import app.pingboost.core.UdpEchoProbe
 import app.pingboost.core.WgConf
 import app.pingboost.data.Server
 import app.pingboost.data.Store
+import app.pingboost.device.DeviceReader
 import app.pingboost.vpn.VpnController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +35,9 @@ class BoosterViewModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
+
+    private val _game = MutableStateFlow(GameState())
+    val game: StateFlow<GameState> = _game.asStateFlow()
 
     private val window = RollingProbeWindow(capacity = 60)
     private var liveJob: Job? = null
@@ -83,6 +89,7 @@ class BoosterViewModel(app: Application) : AndroidViewModel(app) {
         val installedPackages = installed.map { it.packageName }.toSet()
         val enabled = (store.enabledPackages ?: installedPackages).intersect(installedPackages)
         _ui.update { it.copy(installedGames = installed, enabledPackages = enabled) }
+        refreshGame()
     }
 
     fun setGameEnabled(packageName: String, enabled: Boolean) {
@@ -99,6 +106,44 @@ class BoosterViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: PackageManager.NameNotFoundException) {
             false
         }
+
+    // endregion
+
+    // region готовность к игре (FPS)
+
+    /** Снимает состояние телефона заново: частота экрана, нагрев, энергосбережение, память, «Не беспокоить». */
+    fun refreshGame() {
+        val app = getApplication<Application>()
+        val state = _ui.value
+        val target = state.installedGames.firstOrNull { it.packageName in state.enabledPackages }
+            ?: state.installedGames.firstOrNull()
+        val facts = DeviceReader.read(app, gameInstalled = target != null)
+        val checks = Readiness.checks(facts)
+        _game.value = GameState(
+            checks = checks,
+            verdict = Readiness.verdict(checks),
+            fpsCap = Readiness.fpsCap(facts.maxRefreshHz),
+            dndAccess = DeviceReader.dndAccessGranted(app),
+            dndOn = facts.dndOn,
+            launchPackage = target?.packageName,
+        )
+    }
+
+    /** Возвращает false, если сначала нужно дать приложению доступ к «Не беспокоить» в настройках Android. */
+    fun toggleDnd(): Boolean {
+        val app = getApplication<Application>()
+        if (!DeviceReader.dndAccessGranted(app)) return false
+        DeviceReader.setDnd(app, !DeviceReader.isDndOn(app))
+        refreshGame()
+        return true
+    }
+
+    fun launchIntent(): Intent? {
+        val pkg = _game.value.launchPackage ?: return null
+        return getApplication<Application>().packageManager
+            .getLaunchIntentForPackage(pkg)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
 
     // endregion
 

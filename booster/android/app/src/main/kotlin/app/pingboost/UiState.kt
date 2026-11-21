@@ -1,10 +1,24 @@
 package app.pingboost
 
+import app.pingboost.core.Check
 import app.pingboost.core.GameVariant
 import app.pingboost.core.ProbeResult
+import app.pingboost.core.Verdict
 import app.pingboost.data.Server
 
 enum class Phase { Idle, Connecting, Connected, Disconnecting }
+
+/** Состояние вкладки «Игра»: проверка готовности телефона к PUBG. */
+data class GameState(
+    val checks: List<Check> = emptyList(),
+    val verdict: Verdict = Verdict.AlmostReady,
+    /** Сколько FPS в принципе может показать экран: 60/90/120/144. */
+    val fpsCap: Int = 60,
+    val dndAccess: Boolean = false,
+    val dndOn: Boolean = false,
+    /** Пакет игры для кнопки «Запустить» или null, если игры нет. */
+    val launchPackage: String? = null,
+)
 
 data class UiState(
     val servers: List<Server> = emptyList(),

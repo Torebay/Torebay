@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Чтобы кнопка «Не беспокоить» могла включать режим. Пользователь сам даёт доступ в настройках. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <!-- Без этого Android 11+ скрывает чужие приложения от PackageManager.
          Список должен совпадать с PubgGames.kt в модуле core. -->
